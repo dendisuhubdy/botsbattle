@@ -145,8 +145,9 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    // Vitest 4 removed `poolOptions`; these are top-level now.
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    maxWorkers: 1,
     fileParallelism: false,
     testTimeout: 30_000,
     setupFiles: ['dotenv/config'],
@@ -493,6 +494,23 @@ export async function testDb(): Promise<{ db: Db; pool: Pool }> {
   return handle
 }
 
+/**
+ * Flatten an error and its `cause` chain into one string.
+ *
+ * Drizzle reports a failed COMMIT as `Failed query: commit` and hangs the real
+ * Postgres error off `cause`, so deferred-constraint failures are invisible to a
+ * plain `.toThrow(/message/)` assertion.
+ */
+export function errorChain(err: unknown): string {
+  const parts: string[] = []
+  let current: unknown = err
+  while (current instanceof Error) {
+    parts.push(current.message)
+    current = current.cause
+  }
+  return parts.join(' | ')
+}
+
 /** Wipe all data and restore the seeded singleton house accounts. */
 export async function truncateAll(db: Db): Promise<void> {
   await db.execute(sql`
@@ -511,7 +529,7 @@ export async function truncateAll(db: Db): Promise<void> {
 ```ts
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import { sql } from 'drizzle-orm'
-import { testDb, truncateAll } from '../helpers/db'
+import { testDb, truncateAll, errorChain } from '../helpers/db'
 import type { Db } from '@/lib/db/client'
 
 describe('database', () => {
@@ -526,15 +544,17 @@ describe('database', () => {
   })
 
   it('applies migrations and seeds the house accounts', async () => {
-    const result = await db.execute<{ kind: string }>(
-      sql`SELECT kind FROM accounts ORDER BY kind`,
+    // Sorted in JS: Postgres orders ENUMs by declaration order and text by collation,
+    // neither of which is worth encoding in an assertion about set membership.
+    const result = await db.execute<{ kind: string }>(sql`SELECT kind FROM accounts`)
+    expect(result.rows.map((r) => r.kind).sort()).toEqual(
+      ['house_rake', 'house_dust', 'hot_wallet'].sort(),
     )
-    expect(result.rows.map((r) => r.kind)).toEqual(['house_dust', 'house_rake', 'hot_wallet'])
   })
 
   it('rejects a ledger transaction whose entries do not sum to zero', async () => {
-    await expect(
-      db.transaction(async (tx) => {
+    const error = await db
+      .transaction(async (tx) => {
         const [{ id: txId }] = await tx
           .execute<{ id: string }>(
             sql`INSERT INTO ledger_transactions (kind, idempotency_key)
@@ -550,8 +570,10 @@ describe('database', () => {
           sql`INSERT INTO ledger_entries (tx_id, account_id, amount)
               VALUES (${txId}, ${accountId}, 100)`,
         )
-      }),
-    ).rejects.toThrow(/does not sum to zero/)
+      })
+      .catch((e: unknown) => e)
+
+    expect(errorChain(error)).toMatch(/does not sum to zero/)
   })
 })
 ```
@@ -958,7 +980,7 @@ export async function userBalance(x: Executor, userId: string): Promise<bigint> 
 
 ```ts
 import { eq } from 'drizzle-orm'
-import type { Executor } from '@/lib/db/client'
+import type { Db, Executor, Tx } from '@/lib/db/client'
 import { ledgerEntries, ledgerTransactions } from '@/lib/db/schema'
 
 export type Leg = { accountId: string; amount: bigint }
@@ -982,9 +1004,19 @@ export class LedgerError extends Error {
   }
 }
 
+/** A `Tx` carries a rollback handle; a pooled `Db` does not. */
+function isTx(x: Executor): x is Tx {
+  return 'rollback' in x
+}
+
 /**
  * Write one balanced ledger transaction.
  * Replaying an `idempotencyKey` is a no-op that returns the original transaction id.
+ *
+ * The header row and its entries must land in the same database transaction: the
+ * `ledger_transactions_nonempty` constraint trigger fires at COMMIT, so an autocommitted
+ * header with no entries yet is a constraint violation. When handed a pooled `Db` this
+ * opens its own transaction; when handed a `Tx` it joins the caller's.
  */
 export async function postTransaction(x: Executor, args: PostArgs): Promise<PostResult> {
   const legs = args.legs.filter((leg) => leg.amount !== 0n)
@@ -1000,6 +1032,11 @@ export async function postTransaction(x: Executor, args: PostArgs): Promise<Post
     )
   }
 
+  if (isTx(x)) return write(x, args, legs)
+  return (x as Db).transaction((tx) => write(tx, args, legs))
+}
+
+async function write(x: Executor, args: PostArgs, legs: Leg[]): Promise<PostResult> {
   const inserted = await x
     .insert(ledgerTransactions)
     .values({
