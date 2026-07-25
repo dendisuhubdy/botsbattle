@@ -1,4 +1,14 @@
-import { pgTable, pgEnum, uuid, text, bigint, jsonb, timestamp, index } from 'drizzle-orm/pg-core'
+import {
+  pgTable,
+  pgEnum,
+  uuid,
+  text,
+  bigint,
+  jsonb,
+  timestamp,
+  index,
+  boolean,
+} from 'drizzle-orm/pg-core'
 
 export const accountKind = pgEnum('account_kind', [
   'user_available',
@@ -43,3 +53,24 @@ export const ledgerEntries = pgTable(
     index('ledger_entries_tx_idx').on(t.txId),
   ],
 )
+
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  totpSecretEnc: text('totp_secret_enc'),
+  totpEnabled: boolean('totp_enabled').notNull().default(false),
+  verificationStatus: text('verification_status').notNull().default('none'),
+  withdrawalLocked: boolean('withdrawal_locked').notNull().default(false),
+  isAdmin: boolean('is_admin').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const sessions = pgTable('sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})

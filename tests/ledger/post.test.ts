@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
-import { randomUUID } from 'node:crypto'
 import { testDb, truncateAll } from '../helpers/db'
+import { makeUser } from '../helpers/fixtures'
 import type { Db } from '@/lib/db/client'
 import { userAvailableAccount, houseAccount, balanceOf, userBalance } from '@/lib/ledger/accounts'
 import { postTransaction, LedgerError } from '@/lib/ledger/post'
@@ -17,14 +17,14 @@ describe('ledger', () => {
   })
 
   it('creates a user account once and reuses it', async () => {
-    const userId = randomUUID()
+    const userId = await makeUser(db)
     const a = await userAvailableAccount(db, userId)
     const b = await userAvailableAccount(db, userId)
     expect(a).toBe(b)
   })
 
   it('posts a balanced transaction and moves the balance', async () => {
-    const userId = randomUUID()
+    const userId = await makeUser(db)
     const user = await userAvailableAccount(db, userId)
     const rake = await houseAccount(db, 'house_rake')
 
@@ -44,12 +44,12 @@ describe('ledger', () => {
   })
 
   it('returns zero for an account with no entries', async () => {
-    const user = await userAvailableAccount(db, randomUUID())
+    const user = await userAvailableAccount(db, await makeUser(db))
     expect(await balanceOf(db, user)).toBe(0n)
   })
 
   it('is idempotent: replaying the same key writes no new entries', async () => {
-    const userId = randomUUID()
+    const userId = await makeUser(db)
     const user = await userAvailableAccount(db, userId)
     const rake = await houseAccount(db, 'house_rake')
     const legs = [
@@ -66,7 +66,7 @@ describe('ledger', () => {
   })
 
   it('rejects an unbalanced transaction before touching the database', async () => {
-    const user = await userAvailableAccount(db, randomUUID())
+    const user = await userAvailableAccount(db, await makeUser(db))
     const rake = await houseAccount(db, 'house_rake')
 
     await expect(
@@ -90,7 +90,7 @@ describe('ledger', () => {
   })
 
   it('participates in a caller-supplied transaction and rolls back with it', async () => {
-    const userId = randomUUID()
+    const userId = await makeUser(db)
     const user = await userAvailableAccount(db, userId)
     const rake = await houseAccount(db, 'house_rake')
 

@@ -1283,10 +1283,15 @@ Expected: FAIL — `Failed to resolve import "@/lib/auth/password"`.
 `src/lib/auth/password.ts`:
 
 ```ts
-import { hash, verify, Algorithm } from '@node-rs/argon2'
+import { hash, verify } from '@node-rs/argon2'
+
+// `Algorithm.Argon2id` is an ambient const enum, which `isolatedModules` forbids importing.
+// 2 is its value, and it is also this library's default — passing it explicitly documents
+// that the choice is deliberate rather than inherited.
+const ARGON2ID = 2
 
 const OPTIONS = {
-  algorithm: Algorithm.Argon2id,
+  algorithm: ARGON2ID,
   memoryCost: 19_456,
   timeCost: 2,
   parallelism: 1,
@@ -1320,6 +1325,12 @@ export const SESSION_TTL_DAYS = 30
 const MIN_PASSWORD_LENGTH = 10
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * A well-formed Argon2id hash of a value no user can supply. Verifying against it
+ * keeps the unknown-email path the same cost as the wrong-password path.
+ */
+const DUMMY_HASH_PROMISE = hashPassword(`no-such-user:${' '.repeat(16)}`)
 
 export class AuthError extends Error {
   constructor(
@@ -1375,11 +1386,10 @@ export async function login(
     .where(eq(users.email, normaliseEmail(email)))
     .limit(1)
 
-  // Hash a dummy value when the user is absent so the timing of the two paths matches.
-  const passwordHash = found.length
-    ? found[0].passwordHash
-    : '$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHR2YWx1ZQ$0000000000000000000000000000000000000000000'
-
+  // Verify against a real hash when the user is absent, so the unknown-email path costs
+  // the same as the wrong-password path. A malformed placeholder would throw inside
+  // `verify` and return early, which is exactly the timing signal this exists to remove.
+  const passwordHash = found.length ? found[0].passwordHash : await DUMMY_HASH_PROMISE
   const ok = await verifyPassword(passwordHash, password)
   if (!found.length || !ok) throw new AuthError('invalid email or password', 'BAD_CREDENTIALS')
 
@@ -1601,19 +1611,51 @@ import { signup } from '@/lib/auth/session'
 
 let counter = 0
 
+/** The password every fixture user is created with. */
+export const FIXTURE_PASSWORD = 'a-good-password'
+
+/**
+ * A real, pre-computed Argon2id hash of `FIXTURE_PASSWORD` — verified against
+ * `verifyPassword`, so fixture users can log in.
+ *
+ * Fixtures insert users directly rather than going through `signup`: at 19 MiB memory
+ * cost, hashing several passwords per test adds seconds across the suite.
+ *
+ * Regenerate with:
+ *   node --input-type=module -e "import {hash} from '@node-rs/argon2';
+ *     console.log(await hash('a-good-password',
+ *       {algorithm:2,memoryCost:19456,timeCost:2,parallelism:1}))"
+ */
+const CANNED_HASH =
+  '$argon2id$v=19$m=19456,t=2,p=1$JIDTUWsRUQajxQIHCIyaFw$EgPu2Va+2q6AkCmV7diSqKkeWsReeOruvzxtMR49nUo'
+
 export async function makeUser(x: Executor, opts: { admin?: boolean } = {}): Promise<string> {
-  const email = `user${counter++}@example.com`
-  const user = await signup(x, email, 'a-good-password')
-  if (opts.admin) {
-    await x.update(users).set({ isAdmin: true }).where(eq(users.id, user.id))
-  }
-  return user.id
+  const [created] = await x
+    .insert(users)
+    .values({
+      email: `user${counter++}@example.com`,
+      passwordHash: CANNED_HASH,
+      isAdmin: opts.admin ?? false,
+    })
+    .returning({ id: users.id })
+  return created.id
 }
 
 export async function makeAdmin(x: Executor): Promise<string> {
   return makeUser(x, { admin: true })
 }
+
+/** Create a user through the real signup path, then promote them. */
+export async function makeRealAdmin(x: Executor, email: string, password: string): Promise<string> {
+  const user = await signup(x, email, password)
+  await x.update(users).set({ isAdmin: true }).where(eq(users.id, user.id))
+  return user.id
+}
 ```
+
+**Note for Task 3's tests:** migration 0002 adds an FK from `accounts.user_id` to `users.id`, so
+the ledger tests can no longer invent user UUIDs with `randomUUID()`. They must call `makeUser`.
+This is why `fixtures.ts` is created here rather than in Task 5.
 
 `tests/fights/repo.test.ts`:
 
