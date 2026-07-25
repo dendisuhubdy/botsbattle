@@ -21,7 +21,8 @@ export class WithdrawalError extends Error {
       | 'INVALID_ADDRESS'
       | 'LOCKED'
       | 'NOT_FOUND'
-      | 'NOT_CANCELLABLE',
+      | 'NOT_CANCELLABLE'
+      | 'NOT_REVIEWABLE',
   ) {
     super(message)
     this.name = 'WithdrawalError'
