@@ -21,6 +21,8 @@
 - **No Tron, no worker, no signer in this slice.** Balances are created by an admin credit endpoint standing in for deposits.
 - Sessions are server-side rows in Postgres delivered as an `httpOnly`, `Secure`, `SameSite=Lax` cookie named `bb_session` with 30-day expiry. Argon2id for passwords.
 - UI in this slice is functional and unstyled. Design work is explicitly out of scope.
+- **Work directly on `main`, and `git push origin main` after every task's commit.** Do not batch commits locally and do not open branches unless asked — the repository owner tracks progress from the remote.
+- The production domain is **botsfight.com** (relevant to Slice 4; the spec's `sslip.io` TLS workaround is obsolete).
 
 ## File Structure
 
@@ -571,11 +573,12 @@ pnpm typecheck
 
 Expected: PASS, 2 tests. Typecheck clean.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 10: Commit and push**
 
 ```bash
 git add -A
 git commit -m "feat: project scaffold, Postgres migrations, and zero-sum ledger constraint"
+git push origin main
 ```
 
 ---
@@ -721,11 +724,12 @@ export function formatUsdtExact(micros: bigint): string {
 Run: `pnpm test tests/money/units.test.ts`
 Expected: PASS, 6 tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit and push**
 
 ```bash
 git add src/lib/money/units.ts tests/money/units.test.ts
 git commit -m "feat: micro-unit money parsing and formatting"
+git push origin main
 ```
 
 ---
@@ -1027,11 +1031,12 @@ export async function postTransaction(x: Executor, args: PostArgs): Promise<Post
 Run: `pnpm test tests/ledger/post.test.ts`
 Expected: PASS, 7 tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Commit and push**
 
 ```bash
 git add src/lib/ledger tests/ledger
 git commit -m "feat: double-entry ledger accounts and idempotent posting"
+git push origin main
 ```
 
 ---
@@ -1384,11 +1389,12 @@ pnpm typecheck
 
 Expected: PASS, 9 tests. Typecheck clean.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: Commit and push**
 
 ```bash
 git add migrations/0002_users.sql src/lib/db/schema.ts src/lib/auth tests/auth tests/helpers/db.ts
 git commit -m "feat: users, Argon2id passwords, and server-side sessions"
+git push origin main
 ```
 
 ---
@@ -1915,11 +1921,12 @@ pnpm typecheck
 
 Expected: PASS, 13 tests. Typecheck clean.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Commit and push**
 
 ```bash
 git add migrations/0003_fights.sql src/lib/db/schema.ts src/lib/fights tests/fights tests/helpers
 git commit -m "feat: fight lifecycle, pool totals, and estimated odds"
+git push origin main
 ```
 
 ---
@@ -2052,11 +2059,12 @@ export async function creditUser(x: Executor, args: CreditArgs): Promise<PostRes
 Run: `pnpm test tests/admin/credit.test.ts`
 Expected: PASS, 3 tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit and push**
 
 ```bash
 git add src/lib/admin tests/admin
 git commit -m "feat: idempotent admin credit as the deposit stand-in"
+git push origin main
 ```
 
 ---
@@ -2385,11 +2393,12 @@ pnpm typecheck
 
 Expected: PASS, 9 tests. The concurrency test is the one that matters — if it is flaky, the row lock is not being taken and the bug is real.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit and push**
 
 ```bash
 git add src/lib/bets tests/bets
 git commit -m "feat: bet placement with row-locked balance and lock-time enforcement"
+git push origin main
 ```
 
 ---
@@ -2750,11 +2759,12 @@ pnpm test tests/settlement/math.test.ts
 
 Expected: PASS, 15 tests, ~14,000 generated pools. If fast-check reports a counterexample, do not weaken the property — the counterexample is the bug.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit and push**
 
 ```bash
 git add src/lib/settlement/math.ts tests/settlement/math.test.ts
 git commit -m "feat: integer pari-mutuel settlement math with property-based proofs"
+git push origin main
 ```
 
 ---
@@ -3174,11 +3184,12 @@ pnpm typecheck
 
 Expected: PASS. The full suite must be green at this point — the entire money engine is now built.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit and push**
 
 ```bash
 git add src/lib/settlement/settle.ts tests/settlement/settle.test.ts
 git commit -m "feat: idempotent transactional settlement with pool-drained assertion"
+git push origin main
 ```
 
 ---
@@ -3617,11 +3628,12 @@ pnpm build
 
 Expected: all tests PASS, typecheck clean, `next build` succeeds. `next build` is the real check here — route handler signatures and the async `cookies()`/`params` contracts are compile-time errors in Next 15.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Commit and push**
 
 ```bash
 git add src/lib/http src/app/api tests/http
 git commit -m "feat: public API — auth, account, fights, and bet placement"
+git push origin main
 ```
 
 ---
@@ -3887,11 +3899,1075 @@ pnpm test
 
 Expected: typecheck clean, build succeeds, all tests still PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit and push**
 
 ```bash
 git add scripts/make-admin.ts src/app/api/admin package.json
 git commit -m "feat: admin API for fights, settlement, credits, and CLI admin bootstrap"
+git push origin main
 ```
 
-<!-- PLAN-CONTINUES -->
+---
+
+## Task 12: Public pages
+
+Functional, unstyled, and deliberately plain. Design is a later slice.
+
+**Files:**
+- Create: `src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css`
+- Create: `src/app/login/page.tsx`, `src/app/signup/page.tsx`
+- Create: `src/app/fights/[id]/page.tsx`, `src/app/account/page.tsx`
+- Create: `src/components/AuthForm.tsx`, `src/components/BetForm.tsx`, `src/components/Money.tsx`, `src/components/Nav.tsx`
+- Create: `src/lib/client/api.ts`
+
+**Interfaces:**
+- Consumes: the public API contract from Task 10
+- Produces (`src/lib/client/api.ts`):
+  - `apiGet<T>(path: string): Promise<T>`
+  - `apiPost<T>(path: string, body: unknown): Promise<T>`
+  - `class ApiError extends Error { code: string; status: number }`
+
+All money crosses the wire as micro-unit decimal strings and is rendered by `<Money micros={...} />`, which calls `formatUsdt`. No component does arithmetic on a `number`.
+
+- [ ] **Step 1: Write the client API helper and the money component**
+
+`src/lib/client/api.ts`:
+
+```ts
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+async function unwrap<T>(response: Response): Promise<T> {
+  const body = await response.json().catch(() => null)
+  if (!response.ok) {
+    const error = body?.error ?? { code: 'INTERNAL', message: 'request failed' }
+    throw new ApiError(response.status, error.code, error.message)
+  }
+  return body.data as T
+}
+
+export async function apiGet<T>(path: string): Promise<T> {
+  return unwrap<T>(await fetch(path, { cache: 'no-store' }))
+}
+
+export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  return unwrap<T>(
+    await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    }),
+  )
+}
+```
+
+`src/components/Money.tsx`:
+
+```tsx
+import { formatUsdt } from '@/lib/money/units'
+
+export function Money({ micros }: { micros: string | bigint | null }) {
+  if (micros === null) return <span>—</span>
+  return <span>{formatUsdt(BigInt(micros))} USDT</span>
+}
+
+export function Multiplier({ micros }: { micros: string | null }) {
+  if (micros === null) return <span>—</span>
+  return <span>{formatUsdt(BigInt(micros))}×</span>
+}
+```
+
+- [ ] **Step 2: Write the layout and navigation**
+
+`src/app/globals.css`:
+
+```css
+:root { color-scheme: light dark; }
+body { font-family: system-ui, sans-serif; margin: 0; padding: 1.5rem; max-width: 60rem; }
+a { color: inherit; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid currentColor; padding: 0.35rem 0.6rem; text-align: left; }
+fieldset { border: 1px solid currentColor; margin: 1rem 0; }
+label { display: block; margin: 0.5rem 0; }
+input, select, button { font: inherit; padding: 0.3rem; }
+.error { color: #b00020; }
+.estimate { opacity: 0.8; font-size: 0.9em; }
+```
+
+`src/app/layout.tsx`:
+
+```tsx
+import type { Metadata } from 'next'
+import './globals.css'
+import { Nav } from '@/components/Nav'
+
+export const metadata: Metadata = {
+  title: 'Bots Battle',
+  description: 'Pari-mutuel betting on Robot MMA',
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <Nav />
+        <main>{children}</main>
+      </body>
+    </html>
+  )
+}
+```
+
+`src/components/Nav.tsx`:
+
+```tsx
+import Link from 'next/link'
+import { currentUser } from '@/lib/http/auth'
+import { getDb } from '@/lib/db/client'
+import { userBalance } from '@/lib/ledger/accounts'
+import { Money } from './Money'
+
+export async function Nav() {
+  const user = await currentUser()
+  const balance = user ? await userBalance(getDb(), user.id) : null
+
+  return (
+    <nav>
+      <Link href="/">Fights</Link>
+      {' · '}
+      {user ? (
+        <>
+          <Link href="/account">Account</Link>
+          {user.isAdmin && (
+            <>
+              {' · '}
+              <Link href="/admin">Admin</Link>
+            </>
+          )}
+          {' · '}
+          <span>
+            {user.email} — <Money micros={balance} />
+          </span>
+        </>
+      ) : (
+        <>
+          <Link href="/login">Log in</Link>
+          {' · '}
+          <Link href="/signup">Sign up</Link>
+        </>
+      )}
+      <hr />
+    </nav>
+  )
+}
+```
+
+- [ ] **Step 3: Write the fight list page**
+
+`src/app/page.tsx` — a server component reading the database directly; the polling happens only on the fight detail page where the numbers actually move:
+
+```tsx
+import Link from 'next/link'
+import { getDb } from '@/lib/db/client'
+import { listFights, lockDueFights, poolTotals, estimatedPayoutPerUsdt } from '@/lib/fights/repo'
+import { Money, Multiplier } from '@/components/Money'
+
+export const dynamic = 'force-dynamic'
+
+export default async function HomePage() {
+  const db = getDb()
+  await lockDueFights(db)
+
+  const fights = await listFights(db, ['OPEN', 'LOCKED', 'SETTLED', 'VOIDED'])
+  const rows = await Promise.all(
+    fights.map(async (fight) => {
+      const totals = await poolTotals(db, fight.id)
+      return { fight, totals, estimated: estimatedPayoutPerUsdt(totals, fight.rakeBps) }
+    }),
+  )
+
+  if (!rows.length) return <p>No fights are open right now.</p>
+
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Fight</th>
+          <th>Status</th>
+          <th>Pool</th>
+          <th>Est. A</th>
+          <th>Est. B</th>
+          <th>Locks</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(({ fight, totals, estimated }) => (
+          <tr key={fight.id}>
+            <td>
+              <Link href={`/fights/${fight.id}`}>
+                {fight.fighterA} vs {fight.fighterB}
+              </Link>
+              <div className="estimate">{fight.leagueName}</div>
+            </td>
+            <td>
+              {fight.status}
+              {fight.outcome ? ` (${fight.outcome})` : ''}
+            </td>
+            <td>
+              <Money micros={totals.total} />
+            </td>
+            <td>
+              <Multiplier micros={estimated.a === null ? null : estimated.a.toString()} />
+            </td>
+            <td>
+              <Multiplier micros={estimated.b === null ? null : estimated.b.toString()} />
+            </td>
+            <td>{fight.lockAt.toISOString().replace('T', ' ').slice(0, 16)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+```
+
+- [ ] **Step 4: Write the auth pages**
+
+`src/components/AuthForm.tsx`:
+
+```tsx
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { apiPost, ApiError } from '@/lib/client/api'
+
+export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
+  const router = useRouter()
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await apiPost(`/api/auth/${mode}`, { email, password })
+      router.push('/')
+      router.refresh()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit}>
+      <fieldset>
+        <legend>{mode === 'login' ? 'Log in' : 'Sign up'}</legend>
+        <label>
+          Email
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        </label>
+        <label>
+          Password
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            minLength={mode === 'signup' ? 10 : 1}
+            required
+          />
+        </label>
+        {mode === 'signup' && <p className="estimate">At least 10 characters.</p>}
+        {error && <p className="error">{error}</p>}
+        <button type="submit" disabled={busy}>
+          {busy ? 'Working…' : mode === 'login' ? 'Log in' : 'Create account'}
+        </button>
+      </fieldset>
+    </form>
+  )
+}
+```
+
+`src/app/login/page.tsx`:
+
+```tsx
+import { AuthForm } from '@/components/AuthForm'
+
+export default function LoginPage() {
+  return <AuthForm mode="login" />
+}
+```
+
+`src/app/signup/page.tsx`:
+
+```tsx
+import { AuthForm } from '@/components/AuthForm'
+
+export default function SignupPage() {
+  return <AuthForm mode="signup" />
+}
+```
+
+- [ ] **Step 5: Write the fight detail page with the bet form**
+
+`src/components/BetForm.tsx` — polls every 3 seconds per the spec, and generates a fresh idempotency key per submission attempt so a retried click cannot double-charge:
+
+```tsx
+'use client'
+
+import { useEffect, useState, useRef } from 'react'
+import { apiGet, apiPost, ApiError } from '@/lib/client/api'
+import { formatUsdt } from '@/lib/money/units'
+
+type FightView = {
+  fight: { id: string; fighterA: string; fighterB: string; status: string; outcome: string | null }
+  totals: { total: string; a: string; b: string }
+  estimated: { a: string | null; b: string | null }
+}
+
+const POLL_MS = 3000
+
+export function BetForm({ fightId, initial }: { fightId: string; initial: FightView }) {
+  const [view, setView] = useState(initial)
+  const [side, setSide] = useState<'A' | 'B'>('A')
+  const [stake, setStake] = useState('10')
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const keyRef = useRef(crypto.randomUUID())
+
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        setView(await apiGet<FightView>(`/api/fights/${fightId}`))
+      } catch {
+        // A failed poll is not worth surfacing; the next one will refresh the numbers.
+      }
+    }, POLL_MS)
+    return () => clearInterval(timer)
+  }, [fightId])
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    try {
+      await apiPost(`/api/fights/${fightId}/bets`, {
+        side,
+        stake,
+        idempotencyKey: keyRef.current,
+      })
+      keyRef.current = crypto.randomUUID()
+      setMessage(`Bet placed on ${side}.`)
+      setView(await apiGet<FightView>(`/api/fights/${fightId}`))
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const open = view.fight.status === 'OPEN'
+  const estimate = side === 'A' ? view.estimated.a : view.estimated.b
+
+  return (
+    <>
+      <table>
+        <tbody>
+          <tr>
+            <th>Pool</th>
+            <td>{formatUsdt(BigInt(view.totals.total))} USDT</td>
+          </tr>
+          <tr>
+            <th>{view.fight.fighterA} (A)</th>
+            <td>
+              {formatUsdt(BigInt(view.totals.a))} USDT —{' '}
+              {view.estimated.a ? `${formatUsdt(BigInt(view.estimated.a))}×` : '—'}
+            </td>
+          </tr>
+          <tr>
+            <th>{view.fight.fighterB} (B)</th>
+            <td>
+              {formatUsdt(BigInt(view.totals.b))} USDT —{' '}
+              {view.estimated.b ? `${formatUsdt(BigInt(view.estimated.b))}×` : '—'}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p className="estimate">
+        Estimated payouts move with the pool and are not fixed until betting locks.
+      </p>
+
+      {open ? (
+        <form onSubmit={submit}>
+          <fieldset>
+            <legend>Place a bet</legend>
+            <label>
+              Robot
+              <select value={side} onChange={(e) => setSide(e.target.value as 'A' | 'B')}>
+                <option value="A">{view.fight.fighterA} (A)</option>
+                <option value="B">{view.fight.fighterB} (B)</option>
+              </select>
+            </label>
+            <label>
+              Stake (USDT, minimum 1)
+              <input value={stake} onChange={(e) => setStake(e.target.value)} inputMode="decimal" />
+            </label>
+            <p className="estimate">
+              At the current pool that would return about{' '}
+              {estimate ? `${formatUsdt(BigInt(estimate))}× your stake` : 'an unknown multiple'}.
+            </p>
+            {error && <p className="error">{error}</p>}
+            {message && <p>{message}</p>}
+            <button type="submit" disabled={busy}>
+              {busy ? 'Placing…' : 'Place bet'}
+            </button>
+          </fieldset>
+        </form>
+      ) : (
+        <p>
+          Betting is closed — this fight is {view.fight.status}
+          {view.fight.outcome ? ` (${view.fight.outcome})` : ''}.
+        </p>
+      )}
+    </>
+  )
+}
+```
+
+`src/app/fights/[id]/page.tsx`:
+
+```tsx
+import { notFound } from 'next/navigation'
+import { getDb } from '@/lib/db/client'
+import { getFight, lockDueFights, poolTotals, estimatedPayoutPerUsdt, FightError } from '@/lib/fights/repo'
+import { BetForm } from '@/components/BetForm'
+import { currentUser } from '@/lib/http/auth'
+import Link from 'next/link'
+
+export const dynamic = 'force-dynamic'
+
+export default async function FightPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+  const db = getDb()
+  await lockDueFights(db)
+
+  const fight = await getFight(db, id).catch((err) => {
+    if (err instanceof FightError && err.code === 'NOT_FOUND') notFound()
+    throw err
+  })
+
+  if (fight.status === 'DRAFT') notFound()
+
+  const totals = await poolTotals(db, id)
+  const estimated = estimatedPayoutPerUsdt(totals, fight.rakeBps)
+  const user = await currentUser()
+
+  const initial = {
+    fight: {
+      id: fight.id,
+      fighterA: fight.fighterA,
+      fighterB: fight.fighterB,
+      status: fight.status,
+      outcome: fight.outcome,
+    },
+    totals: { total: totals.total.toString(), a: totals.a.toString(), b: totals.b.toString() },
+    estimated: {
+      a: estimated.a === null ? null : estimated.a.toString(),
+      b: estimated.b === null ? null : estimated.b.toString(),
+    },
+  }
+
+  return (
+    <>
+      <h1>
+        {fight.fighterA} vs {fight.fighterB}
+      </h1>
+      <p>
+        {fight.leagueName} · rake {(fight.rakeBps / 100).toFixed(2)}%
+      </p>
+
+      {fight.streamEmbedUrl && (
+        <iframe
+          src={fight.streamEmbedUrl}
+          title="Live stream"
+          width="640"
+          height="360"
+          allowFullScreen
+        />
+      )}
+
+      {user ? (
+        <BetForm fightId={fight.id} initial={initial} />
+      ) : (
+        <p>
+          <Link href="/login">Log in</Link> to place a bet.
+        </p>
+      )}
+    </>
+  )
+}
+```
+
+- [ ] **Step 6: Write the account page**
+
+`src/app/account/page.tsx`:
+
+```tsx
+import { redirect } from 'next/navigation'
+import Link from 'next/link'
+import { getDb } from '@/lib/db/client'
+import { currentUser } from '@/lib/http/auth'
+import { userBalance } from '@/lib/ledger/accounts'
+import { listUserBets } from '@/lib/bets/place'
+import { Money } from '@/components/Money'
+
+export const dynamic = 'force-dynamic'
+
+export default async function AccountPage() {
+  const user = await currentUser()
+  if (!user) redirect('/login')
+
+  const db = getDb()
+  const [balance, bets] = await Promise.all([userBalance(db, user.id), listUserBets(db, user.id)])
+
+  return (
+    <>
+      <h1>Account</h1>
+      <p>
+        Balance: <Money micros={balance} />
+      </p>
+
+      <h2>Bets</h2>
+      {bets.length === 0 ? (
+        <p>No bets yet.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Fight</th>
+              <th>Side</th>
+              <th>Stake</th>
+              <th>Status</th>
+              <th>Payout</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bets.map((bet) => (
+              <tr key={bet.id}>
+                <td>
+                  <Link href={`/fights/${bet.fightId}`}>
+                    {bet.fighterA} vs {bet.fighterB}
+                  </Link>
+                </td>
+                <td>{bet.side}</td>
+                <td>
+                  <Money micros={bet.stake} />
+                </td>
+                <td>
+                  {bet.fightStatus}
+                  {bet.outcome ? ` (${bet.outcome})` : ''}
+                </td>
+                <td>
+                  <Money micros={bet.payout} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  )
+}
+```
+
+- [ ] **Step 7: Verify the build and click through the app**
+
+```bash
+pnpm typecheck
+pnpm build
+pnpm db:migrate
+pnpm dev
+```
+
+Then, in a browser at `http://localhost:3000`: sign up, note the empty balance, and confirm the fight list renders "No fights are open right now." Admin flows are exercised in Task 13.
+
+- [ ] **Step 8: Commit and push**
+
+```bash
+git add src/app src/components src/lib/client
+git commit -m "feat: public pages — fight list, fight detail with polling odds, account"
+git push origin main
+```
+
+---
+
+## Task 13: Admin pages and the end-to-end walkthrough
+
+**Files:**
+- Create: `src/app/admin/page.tsx`, `src/app/admin/fights/[id]/page.tsx`
+- Create: `src/components/CreateFightForm.tsx`, `src/components/FightAdminControls.tsx`, `src/components/CreditForm.tsx`
+- Create: `docs/superpowers/plans/slice-1-walkthrough.md`
+
+**Interfaces:**
+- Consumes: the admin API contract from Task 11
+- Produces: no new modules; this task closes the loop
+
+- [ ] **Step 1: Write the admin forms**
+
+`src/components/CreateFightForm.tsx`:
+
+```tsx
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { apiPost, ApiError } from '@/lib/client/api'
+
+export function CreateFightForm() {
+  const router = useRouter()
+  const [form, setForm] = useState({
+    leagueName: '',
+    fighterA: '',
+    fighterB: '',
+    streamEmbedUrl: '',
+    lockAt: '',
+    rakeBps: '500',
+  })
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const set = (key: keyof typeof form) => (event: React.ChangeEvent<HTMLInputElement>) =>
+    setForm((prev) => ({ ...prev, [key]: event.target.value }))
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await apiPost('/api/admin/fights', {
+        leagueName: form.leagueName,
+        fighterA: form.fighterA,
+        fighterB: form.fighterB,
+        streamEmbedUrl: form.streamEmbedUrl || null,
+        lockAt: new Date(form.lockAt).toISOString(),
+        rakeBps: Number(form.rakeBps),
+      })
+      router.refresh()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit}>
+      <fieldset>
+        <legend>New fight</legend>
+        <label>
+          League <input value={form.leagueName} onChange={set('leagueName')} required />
+        </label>
+        <label>
+          Robot A <input value={form.fighterA} onChange={set('fighterA')} required />
+        </label>
+        <label>
+          Robot B <input value={form.fighterB} onChange={set('fighterB')} required />
+        </label>
+        <label>
+          Stream embed URL <input value={form.streamEmbedUrl} onChange={set('streamEmbedUrl')} />
+        </label>
+        <label>
+          Locks at <input type="datetime-local" value={form.lockAt} onChange={set('lockAt')} required />
+        </label>
+        <label>
+          Rake (bps, 0–2000) <input type="number" value={form.rakeBps} onChange={set('rakeBps')} />
+        </label>
+        {error && <p className="error">{error}</p>}
+        <button type="submit" disabled={busy}>
+          {busy ? 'Creating…' : 'Create draft'}
+        </button>
+      </fieldset>
+    </form>
+  )
+}
+```
+
+`src/components/FightAdminControls.tsx` — settlement asks for a typed confirmation because it is irreversible and moves real balances:
+
+```tsx
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { apiPost, ApiError } from '@/lib/client/api'
+
+export function FightAdminControls({
+  fightId,
+  status,
+  fighterA,
+  fighterB,
+}: {
+  fightId: string
+  status: string
+  fighterA: string
+  fighterB: string
+}) {
+  const router = useRouter()
+  const [confirm, setConfirm] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function call(path: string, body?: unknown) {
+    setBusy(true)
+    setError(null)
+    try {
+      await apiPost(path, body)
+      setConfirm('')
+      router.refresh()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const canSettle = status === 'LOCKED'
+  const canVoid = status === 'OPEN' || status === 'LOCKED'
+  const armed = confirm === 'SETTLE'
+
+  return (
+    <fieldset>
+      <legend>Controls — fight is {status}</legend>
+
+      {status === 'DRAFT' && (
+        <button disabled={busy} onClick={() => call(`/api/admin/fights/${fightId}/publish`)}>
+          Publish (open betting)
+        </button>
+      )}
+
+      {(canSettle || canVoid) && (
+        <>
+          <label>
+            Type SETTLE to enable outcome buttons
+            <input value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          </label>
+
+          {canSettle && (
+            <>
+              <button
+                disabled={busy || !armed}
+                onClick={() => call(`/api/admin/fights/${fightId}/settle`, { outcome: 'A' })}
+              >
+                {fighterA} (A) won
+              </button>{' '}
+              <button
+                disabled={busy || !armed}
+                onClick={() => call(`/api/admin/fights/${fightId}/settle`, { outcome: 'B' })}
+              >
+                {fighterB} (B) won
+              </button>{' '}
+            </>
+          )}
+
+          {canVoid && (
+            <button
+              disabled={busy || !armed}
+              onClick={() => call(`/api/admin/fights/${fightId}/settle`, { outcome: 'VOID' })}
+            >
+              Void and refund
+            </button>
+          )}
+        </>
+      )}
+
+      {error && <p className="error">{error}</p>}
+    </fieldset>
+  )
+}
+```
+
+`src/components/CreditForm.tsx`:
+
+```tsx
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { apiPost, ApiError } from '@/lib/client/api'
+
+export function CreditForm({ users }: { users: { id: string; email: string }[] }) {
+  const router = useRouter()
+  const [userId, setUserId] = useState(users[0]?.id ?? '')
+  const [amount, setAmount] = useState('100')
+  const [reference, setReference] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await apiPost('/api/admin/credits', { userId, amount, reference })
+      setReference('')
+      router.refresh()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit}>
+      <fieldset>
+        <legend>Credit a balance (stands in for a deposit)</legend>
+        <label>
+          User
+          <select value={userId} onChange={(e) => setUserId(e.target.value)}>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.email}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Amount (USDT) <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
+        </label>
+        <label>
+          Reference (unique; replaying it is a no-op)
+          <input value={reference} onChange={(e) => setReference(e.target.value)} minLength={4} required />
+        </label>
+        {error && <p className="error">{error}</p>}
+        <button type="submit" disabled={busy || !userId}>
+          {busy ? 'Crediting…' : 'Credit'}
+        </button>
+      </fieldset>
+    </form>
+  )
+}
+```
+
+- [ ] **Step 2: Write the admin pages**
+
+`src/app/admin/page.tsx`:
+
+```tsx
+import Link from 'next/link'
+import { notFound } from 'next/navigation'
+import { sql } from 'drizzle-orm'
+import { getDb } from '@/lib/db/client'
+import { currentUser } from '@/lib/http/auth'
+import { listFights, poolTotals } from '@/lib/fights/repo'
+import { CreateFightForm } from '@/components/CreateFightForm'
+import { CreditForm } from '@/components/CreditForm'
+import { Money } from '@/components/Money'
+
+export const dynamic = 'force-dynamic'
+
+export default async function AdminPage() {
+  const user = await currentUser()
+  if (!user?.isAdmin) notFound()
+
+  const db = getDb()
+  const fights = await listFights(db, ['DRAFT', 'OPEN', 'LOCKED', 'SETTLED', 'VOIDED'])
+  const rows = await Promise.all(
+    fights.map(async (fight) => ({ fight, totals: await poolTotals(db, fight.id) })),
+  )
+  const users = await db.execute<{ id: string; email: string }>(
+    sql`SELECT id, email FROM users ORDER BY created_at DESC`,
+  )
+
+  return (
+    <>
+      <h1>Admin</h1>
+      <CreateFightForm />
+      <CreditForm users={users.rows} />
+
+      <h2>Fights</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Fight</th>
+            <th>Status</th>
+            <th>Pool</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ fight, totals }) => (
+            <tr key={fight.id}>
+              <td>
+                <Link href={`/admin/fights/${fight.id}`}>
+                  {fight.fighterA} vs {fight.fighterB}
+                </Link>
+              </td>
+              <td>
+                {fight.status}
+                {fight.outcome ? ` (${fight.outcome})` : ''}
+              </td>
+              <td>
+                <Money micros={totals.total} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  )
+}
+```
+
+`src/app/admin/fights/[id]/page.tsx`:
+
+```tsx
+import { notFound } from 'next/navigation'
+import { getDb } from '@/lib/db/client'
+import { currentUser } from '@/lib/http/auth'
+import { getFight, poolTotals, FightError } from '@/lib/fights/repo'
+import { FightAdminControls } from '@/components/FightAdminControls'
+import { Money } from '@/components/Money'
+
+export const dynamic = 'force-dynamic'
+
+export default async function AdminFightPage({ params }: { params: Promise<{ id: string }> }) {
+  const user = await currentUser()
+  if (!user?.isAdmin) notFound()
+
+  const { id } = await params
+  const db = getDb()
+
+  const fight = await getFight(db, id).catch((err) => {
+    if (err instanceof FightError && err.code === 'NOT_FOUND') notFound()
+    throw err
+  })
+  const totals = await poolTotals(db, id)
+
+  return (
+    <>
+      <h1>
+        {fight.fighterA} vs {fight.fighterB}
+      </h1>
+      <table>
+        <tbody>
+          <tr>
+            <th>Status</th>
+            <td>
+              {fight.status}
+              {fight.outcome ? ` (${fight.outcome})` : ''}
+            </td>
+          </tr>
+          <tr>
+            <th>Locks at</th>
+            <td>{fight.lockAt.toISOString()}</td>
+          </tr>
+          <tr>
+            <th>Rake</th>
+            <td>{(fight.rakeBps / 100).toFixed(2)}%</td>
+          </tr>
+          <tr>
+            <th>Pool</th>
+            <td>
+              <Money micros={totals.total} /> (A <Money micros={totals.a} />, B{' '}
+              <Money micros={totals.b} />)
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <FightAdminControls
+        fightId={fight.id}
+        status={fight.status}
+        fighterA={fight.fighterA}
+        fighterB={fight.fighterB}
+      />
+    </>
+  )
+}
+```
+
+- [ ] **Step 3: Run the whole suite and build**
+
+```bash
+pnpm test
+pnpm typecheck
+pnpm build
+```
+
+Expected: all tests PASS, typecheck clean, build succeeds.
+
+- [ ] **Step 4: Walk the app end to end by hand**
+
+Write down the result of each step in `docs/superpowers/plans/slice-1-walkthrough.md` as you go. Record actual observed numbers, not expected ones.
+
+```bash
+pnpm db:up
+pnpm db:migrate
+pnpm dev
+```
+
+1. Sign up as `admin@example.com`, then in a second terminal: `pnpm make-admin admin@example.com`. Reload — the `Admin` link appears.
+2. Sign up as `alice@example.com` and `bob@example.com` in private windows.
+3. As admin, credit Alice 100 USDT (reference `seed-alice`) and Bob 100 USDT (reference `seed-bob`).
+4. Submit the credit for Alice a second time with the same reference. Her balance must not change — the confirmation of idempotency in the real UI.
+5. Create a fight locking ~10 minutes out, rake 500 bps. Publish it.
+6. As Alice, bet 25 USDT on A. As Bob, bet 75 USDT on B. Watch the estimate on Alice's open tab move within 3 seconds without a reload.
+7. As admin, wait for the lock time to pass and reload `/admin` so the backstop locks the fight, then settle with outcome A.
+8. Alice's balance must read 170.00 USDT, Bob's 25.00 USDT.
+9. Confirm the house took exactly 5 USDT:
+
+```bash
+docker compose exec db psql -U botsbattle -d botsbattle -c "
+  SELECT a.kind, SUM(le.amount) AS balance
+  FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
+  GROUP BY a.kind ORDER BY a.kind;
+"
+```
+
+10. Confirm the ledger is globally balanced and no transaction is lopsided:
+
+```bash
+docker compose exec db psql -U botsbattle -d botsbattle -c "
+  SELECT COALESCE(SUM(amount), 0) AS grand_total FROM ledger_entries;
+  SELECT tx_id, SUM(amount) FROM ledger_entries GROUP BY tx_id HAVING SUM(amount) <> 0;
+"
+```
+
+Expected: `grand_total` is `0`, and the second query returns no rows. If either fails, stop — that is a production-severity defect in the slice's core claim.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add src/app/admin src/components docs/superpowers/plans/slice-1-walkthrough.md
+git commit -m "feat: admin pages for fight lifecycle, settlement, and credits"
+git push origin main
+```
+
+---
+
+## Done when
+
+- `pnpm test` is green, including ~14,000 generated settlement pools and the concurrent-bet overdraft test
+- `pnpm typecheck` and `pnpm build` are clean
+- The hand walkthrough in Task 13 Step 4 is recorded, with a globally balanced ledger
+- No `balance` column exists anywhere; every balance in the app is a `SUM` over `ledger_entries`
+
+## Deliberately not in this slice
+
+Tron, deposits, withdrawals, the signer process, TOTP, `balance_cache` and reconciliation, visual design, and deployment. Slices 2–4 cover them.
+
