@@ -46,3 +46,26 @@ export function assertMatchesXpub(seed: Uint8Array, xpub: string, index = 0): vo
     )
   }
 }
+
+/**
+ * Fail fast if `TRON_HOT_WALLET_INDEX` does not actually derive `TRON_HOT_WALLET_ADDRESS`.
+ * Withdrawals spend *from* the hot wallet key; if the index is wrong the signer would sign
+ * every withdrawal from a different, probably unfunded, address. Checked at signer startup,
+ * right after `assertMatchesXpub`.
+ */
+export function assertHotWalletKey(
+  seed: Uint8Array,
+  xpub: string,
+  index: number,
+  hotWalletAddress: string,
+): void {
+  const fromSeed = deriveAddress(deriveXpub(seed), index)
+  const fromXpub = deriveAddress(xpub, index)
+  if (fromSeed !== hotWalletAddress) {
+    throw new Error(
+      `TRON_HOT_WALLET_INDEX (${index}) does not derive TRON_HOT_WALLET_ADDRESS: ` +
+        `the seed derives ${fromSeed} (xpub derives ${fromXpub}) at index ${index}, but ` +
+        `TRON_HOT_WALLET_ADDRESS is ${hotWalletAddress}`,
+    )
+  }
+}

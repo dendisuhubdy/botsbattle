@@ -83,8 +83,9 @@ describe('signer job queue', () => {
   it('returns a retryable failure to PENDING', async () => {
     const { jobId } = await enqueueJob(db, job('k1'))
     await claimNextJob(db)
-    await failJob(db, jobId, 'temporary rpc error', { retry: true })
+    const result = await failJob(db, jobId, 'temporary rpc error', { retry: true })
 
+    expect(result).toEqual({ parked: false })
     const [row] = await db.select().from(signerJobs).where(eq(signerJobs.id, jobId))
     expect(row.status).toBe('PENDING')
     expect(row.lastError).toBe('temporary rpc error')
@@ -94,23 +95,31 @@ describe('signer job queue', () => {
   it('marks a non-retryable failure FAILED', async () => {
     const { jobId } = await enqueueJob(db, job('k1'))
     await claimNextJob(db)
-    await failJob(db, jobId, 'bad address', { retry: false })
+    const result = await failJob(db, jobId, 'bad address', { retry: false })
+
+    expect(result).toEqual({ parked: true })
+    const [row] = await db.select().from(signerJobs).where(eq(signerJobs.id, jobId))
+    expect(row.status).toBe('FAILED')
+    expect(await claimNextJob(db)).toBeNull()
+  })
+
+  it('stops retrying after MAX_ATTEMPTS, reporting parked only on the last attempt', async () => {
+    const { jobId } = await enqueueJob(db, job('k1'))
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      const claimed = await claimNextJob(db)
+      expect(claimed).not.toBeNull()
+      const result = await failJob(db, jobId, `attempt ${i}`, { retry: true })
+      expect(result).toEqual({ parked: i === MAX_ATTEMPTS - 1 })
+    }
 
     const [row] = await db.select().from(signerJobs).where(eq(signerJobs.id, jobId))
     expect(row.status).toBe('FAILED')
     expect(await claimNextJob(db)).toBeNull()
   })
 
-  it('stops retrying after MAX_ATTEMPTS', async () => {
-    const { jobId } = await enqueueJob(db, job('k1'))
-    for (let i = 0; i < MAX_ATTEMPTS; i++) {
-      const claimed = await claimNextJob(db)
-      expect(claimed).not.toBeNull()
-      await failJob(db, jobId, `attempt ${i}`, { retry: true })
-    }
-
-    const [row] = await db.select().from(signerJobs).where(eq(signerJobs.id, jobId))
-    expect(row.status).toBe('FAILED')
-    expect(await claimNextJob(db)).toBeNull()
+  it('reports not parked when the job no longer exists', async () => {
+    expect(await failJob(db, '00000000-0000-0000-0000-000000000000', 'gone')).toEqual({
+      parked: false,
+    })
   })
 })

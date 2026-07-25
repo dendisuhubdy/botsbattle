@@ -122,7 +122,7 @@ describe('withdrawal settlement', () => {
     // Fund the hot wallet on the fake chain so the send can succeed.
     tron.deposit({ to: HOT, amountMicros: 500n * USDT, blockNumber: 1 })
 
-    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('done')
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })).toBe('done')
 
     expect(tron.broadcasts).toHaveLength(1)
     expect(tron.broadcasts[0]).toMatchObject({ to: DEST, amountMicros: 40n * USDT })
@@ -141,7 +141,7 @@ describe('withdrawal settlement', () => {
     // Exhaust every retry so the job is parked and the withdrawal fails for good.
     for (let i = 0; i < 5; i++) {
       tron.failNextSend('node unreachable')
-      await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })
+      await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })
     }
 
     const [row] = await db.select().from(withdrawalRequests).where(eq(withdrawalRequests.id, requestId))

@@ -87,19 +87,24 @@ export async function completeJob(db: Db, jobId: string, txHash: string): Promis
  * A retryable failure goes back to PENDING until MAX_ATTEMPTS is exhausted, after which it
  * is parked as FAILED for a human. Broadcasting blindly forever would burn gas on a
  * transaction that cannot succeed.
+ *
+ * Returns whether the job was parked (`FAILED`) vs. sent back for retry (`PENDING`), so
+ * callers that need to react to permanent failure — e.g. refunding a withdrawal — have a
+ * single source of truth for that decision instead of recomputing the exhaustion check
+ * themselves and risking disagreement.
  */
 export async function failJob(
   db: Db,
   jobId: string,
   error: string,
   opts: { retry?: boolean } = {},
-): Promise<void> {
+): Promise<{ parked: boolean }> {
   const rows = await db
     .select({ attempts: signerJobs.attempts })
     .from(signerJobs)
     .where(eq(signerJobs.id, jobId))
     .limit(1)
-  if (!rows.length) return
+  if (!rows.length) return { parked: false }
 
   const exhausted = rows[0].attempts >= MAX_ATTEMPTS
   const status = opts.retry && !exhausted ? 'PENDING' : 'FAILED'
@@ -112,4 +117,6 @@ export async function failJob(
       completedAt: status === 'FAILED' ? sql`now()` : null,
     })
     .where(eq(signerJobs.id, jobId))
+
+  return { parked: status === 'FAILED' }
 }

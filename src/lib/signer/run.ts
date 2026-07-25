@@ -1,7 +1,7 @@
 import type { Db } from '@/lib/db/client'
 import { TronError, type TronClient } from '@/lib/tron/client'
 import { failWithdrawal, markBroadcast } from '@/lib/withdrawals/settle'
-import { claimNextJob, completeJob, failJob, MAX_ATTEMPTS } from './jobs'
+import { claimNextJob, completeJob, failJob } from './jobs'
 import { derivePrivateKeyHex } from './keys'
 import type { SweepPayload } from './sweep'
 
@@ -10,17 +10,10 @@ export type SignerDeps = {
   tron: TronClient
   seed: Uint8Array
   hotWalletAddress: string
+  hotWalletIndex: number
 }
 
 export type RunOutcome = 'idle' | 'done' | 'failed'
-
-/**
- * Derivation index that controls the hot wallet's private key. Fixed rather than derived
- * from `hotWalletAddress`, matching the deposit-address/sweep fixtures already established
- * across the test suite (`tests/signer/run.test.ts`, `tests/reconcile/chain.test.ts`), which
- * consistently use index 99 for the hot wallet's test key.
- */
-export const HOT_WALLET_INDEX = 99
 
 type WithdrawPayload = {
   requestId: string
@@ -57,7 +50,7 @@ export async function runOnce(deps: SignerDeps): Promise<RunOutcome> {
     // WITHDRAW: sent from the hot wallet key to the user's requested address.
     const payload = job.payload as unknown as WithdrawPayload
     const txHash = await deps.tron.sendTrc20({
-      fromPrivateKeyHex: derivePrivateKeyHex(deps.seed, HOT_WALLET_INDEX),
+      fromPrivateKeyHex: derivePrivateKeyHex(deps.seed, deps.hotWalletIndex),
       to: payload.address,
       amountMicros: BigInt(payload.amountMicros),
     })
@@ -76,11 +69,13 @@ export async function runOnce(deps: SignerDeps): Promise<RunOutcome> {
     // and will fail identically every time. Retrying it just burns attempts and delays the
     // alert, so park it immediately.
     const retry = err instanceof TronError
-    await failJob(deps.db, job.id, message, { retry })
+    const { parked } = await failJob(deps.db, job.id, message, { retry })
 
     // When a withdrawal job is out of retries the user's funds must come back; leaving them
-    // ring-fenced against a job nobody will ever run again is money silently frozen.
-    if (job.kind === 'WITHDRAW' && (!retry || job.attempts >= MAX_ATTEMPTS)) {
+    // ring-fenced against a job nobody will ever run again is money silently frozen. `parked`
+    // is `failJob`'s own verdict on exhaustion, so this can't disagree with what actually got
+    // written to the job row.
+    if (job.kind === 'WITHDRAW' && parked) {
       const payload = job.payload as unknown as WithdrawPayload
       await failWithdrawal(deps.db, { requestId: payload.requestId, reason: message })
     }

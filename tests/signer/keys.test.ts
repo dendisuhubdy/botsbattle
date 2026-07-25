@@ -5,6 +5,7 @@ import {
   derivePrivateKeyHex,
   deriveXpub,
   assertMatchesXpub,
+  assertHotWalletKey,
   loadSignerSeed,
 } from '@/lib/signer/keys'
 import { deriveAddress } from '@/lib/tron/address'
@@ -12,6 +13,8 @@ import { deriveAddress } from '@/lib/tron/address'
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 const SEED = mnemonicToSeedSync(MNEMONIC)
+// Index 99 of the same test wallet — used across the suite as the fixture "hot wallet".
+const HOT = 'TTTFe9haCY6CACG9iTM8uyL89pFEPy4ctW'
 
 describe('signer keys', () => {
   it('derives a key whose address matches the xpub-derived address', () => {
@@ -55,6 +58,19 @@ describe('signer keys', () => {
   it('loadSignerSeed accepts a valid mnemonic', () => {
     const seed = loadSignerSeed({ TRON_MNEMONIC: MNEMONIC } as unknown as NodeJS.ProcessEnv)
     expect(Buffer.from(seed).toString('hex')).toBe(Buffer.from(SEED).toString('hex'))
+  })
+
+  it('assertHotWalletKey passes when the index derives the configured hot wallet address', () => {
+    expect(() => assertHotWalletKey(SEED, deriveXpub(SEED), 99, HOT)).not.toThrow()
+  })
+
+  it('assertHotWalletKey throws when the index derives a different address', () => {
+    // The load-bearing misconfiguration this guards against: TRON_HOT_WALLET_INDEX points at
+    // an address other than TRON_HOT_WALLET_ADDRESS, so withdrawals would broadcast from the
+    // wrong, probably unfunded, key.
+    expect(() => assertHotWalletKey(SEED, deriveXpub(SEED), 0, HOT)).toThrow(
+      /does not derive TRON_HOT_WALLET_ADDRESS/i,
+    )
   })
 
   it('loadSignerSeed rejects an invalid mnemonic', () => {

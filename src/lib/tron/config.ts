@@ -8,6 +8,7 @@ export type TronConfig = {
   confirmations: number
   sweepMinMicros: bigint
   hotWalletAddress: string
+  hotWalletIndex: number
   xpub: string
 }
 
@@ -28,6 +29,13 @@ export function loadTronConfig(env: NodeJS.ProcessEnv = process.env): TronConfig
     throw new Error(`TRON_NETWORK must be "nile" or "mainnet", got ${network}`)
   }
 
+  const hotWalletIndex = Number(env.TRON_HOT_WALLET_INDEX ?? '0')
+  if (!Number.isInteger(hotWalletIndex) || hotWalletIndex < 0) {
+    throw new Error(
+      `TRON_HOT_WALLET_INDEX must be a non-negative integer, got ${env.TRON_HOT_WALLET_INDEX}`,
+    )
+  }
+
   return {
     network,
     fullHost: env.TRON_FULL_HOST ?? DEFAULT_HOSTS[network],
@@ -36,6 +44,7 @@ export function loadTronConfig(env: NodeJS.ProcessEnv = process.env): TronConfig
     confirmations: Number(env.TRON_CONFIRMATIONS ?? '19'),
     sweepMinMicros: BigInt(env.TRON_SWEEP_MIN_MICROS ?? '20000000'),
     hotWalletAddress: required(env, 'TRON_HOT_WALLET_ADDRESS'),
+    hotWalletIndex,
     xpub: required(env, 'TRON_XPUB'),
   }
 }

@@ -2,7 +2,7 @@ import 'dotenv/config'
 import { createDb } from '../src/lib/db/client'
 import { loadTronConfig } from '../src/lib/tron/config'
 import { createTronGridClient } from '../src/lib/tron/trongrid'
-import { loadSignerSeed, assertMatchesXpub } from '../src/lib/signer/keys'
+import { loadSignerSeed, assertMatchesXpub, assertHotWalletKey } from '../src/lib/signer/keys'
 import { runOnce } from '../src/lib/signer/run'
 import { runLoop } from '../src/lib/process/loop'
 
@@ -17,6 +17,11 @@ const seed = loadSignerSeed()
 // Fail fast if the seed and the xpub the web app publishes are different wallets.
 assertMatchesXpub(seed, config.xpub)
 console.log('[signer] seed matches TRON_XPUB')
+
+// Fail fast if TRON_HOT_WALLET_INDEX does not actually derive TRON_HOT_WALLET_ADDRESS: this
+// is the first code that spends *from* the hot wallet, so the correspondence is load-bearing.
+assertHotWalletKey(seed, config.xpub, config.hotWalletIndex, config.hotWalletAddress)
+console.log('[signer] hot wallet index matches TRON_HOT_WALLET_ADDRESS')
 
 const { db, pool } = createDb(url)
 const tron = createTronGridClient(config)
@@ -37,10 +42,22 @@ await runLoop({
   onError: (err) => console.error('[signer] tick failed:', err),
   onTick: async () => {
     // Drain the queue rather than sleeping between jobs when work is waiting.
-    let outcome = await runOnce({ db, tron, seed, hotWalletAddress: config.hotWalletAddress })
+    let outcome = await runOnce({
+      db,
+      tron,
+      seed,
+      hotWalletAddress: config.hotWalletAddress,
+      hotWalletIndex: config.hotWalletIndex,
+    })
     while (outcome !== 'idle') {
       console.log(`[signer] job ${outcome}`)
-      outcome = await runOnce({ db, tron, seed, hotWalletAddress: config.hotWalletAddress })
+      outcome = await runOnce({
+        db,
+        tron,
+        seed,
+        hotWalletAddress: config.hotWalletAddress,
+        hotWalletIndex: config.hotWalletIndex,
+      })
     }
   },
 })

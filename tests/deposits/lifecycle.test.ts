@@ -75,8 +75,8 @@ describe('deposit-to-settlement lifecycle', () => {
 
     // 2. Sweeps consolidate into the hot wallet without changing custody.
     expect(await enqueueSweeps(db, tron, { minMicros: 20n * USDT })).toBe(2)
-    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('done')
-    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('done')
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })).toBe('done')
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })).toBe('done')
 
     expect(await tron.trc20Balance(HOT)).toBe(200n * USDT)
     expect(await tron.trc20Balance(aliceAddr)).toBe(0n)

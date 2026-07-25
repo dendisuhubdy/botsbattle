@@ -38,7 +38,7 @@ describe('signer runOnce', () => {
 
   it('is idle with no jobs', async () => {
     const tron = new FakeTron()
-    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('idle')
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })).toBe('idle')
   })
 
   it('sweeps a deposit address into the hot wallet', async () => {
@@ -46,7 +46,7 @@ describe('signer runOnce', () => {
     const address = await seedSweepableAddress(tron, 25n * USDT)
     await enqueueSweeps(db, tron, { minMicros: 20n * USDT })
 
-    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('done')
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })).toBe('done')
 
     expect(tron.broadcasts).toHaveLength(1)
     expect(tron.broadcasts[0]).toMatchObject({ from: address, to: HOT, amountMicros: 25n * USDT })
@@ -58,7 +58,7 @@ describe('signer runOnce', () => {
     const tron = new FakeTron()
     await seedSweepableAddress(tron, 25n * USDT)
     await enqueueSweeps(db, tron, { minMicros: 20n * USDT })
-    await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })
+    await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })
 
     const [job] = await db.select().from(signerJobs)
     expect(job.status).toBe('DONE')
@@ -71,14 +71,14 @@ describe('signer runOnce', () => {
     await enqueueSweeps(db, tron, { minMicros: 20n * USDT })
     tron.failNextSend('temporary node error')
 
-    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('failed')
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })).toBe('failed')
 
     const [job] = await db.select().from(signerJobs)
     expect(job.status).toBe('PENDING')
     expect(job.lastError).toMatch(/temporary node error/)
 
     // The retry succeeds and moves the money.
-    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('done')
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })).toBe('done')
     expect(tron.broadcasts).toHaveLength(1)
   })
 
@@ -86,7 +86,7 @@ describe('signer runOnce', () => {
     await enqueueJob(db, { kind: 'NOT_A_REAL_KIND', idempotencyKey: 'weird', payload: {} })
     const tron = new FakeTron()
 
-    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('failed')
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })).toBe('failed')
 
     const [job] = await db.select().from(signerJobs)
     expect(job.status).toBe('FAILED')
@@ -99,12 +99,12 @@ describe('signer runOnce', () => {
     await seedSweepableAddress(tron, 30n * USDT)
     await enqueueSweeps(db, tron, { minMicros: 20n * USDT })
 
-    await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })
+    await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })
     expect(tron.broadcasts).toHaveLength(1)
 
-    await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })
+    await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })
     expect(tron.broadcasts).toHaveLength(2)
 
-    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('idle')
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT, hotWalletIndex: 99 })).toBe('idle')
   })
 })

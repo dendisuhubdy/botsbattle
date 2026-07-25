@@ -95,6 +95,19 @@ export class FakeTron implements TronClient {
 
     const txHash = `send${(this.counter++).toString(16).padStart(60, '0')}`
     this.broadcasts.push({ from, to: args.to, amountMicros: args.amountMicros, txHash })
+
+    // A broadcast is a real transfer on the fake chain, so it must be visible to a later
+    // `incomingTransfers` call — otherwise a poller watching the destination address can
+    // never see its own signer's sends land.
+    this.transfers.push({
+      txHash,
+      logIndex: 0,
+      from,
+      to: args.to,
+      amountMicros: args.amountMicros,
+      blockNumber: this.head,
+    })
+
     return txHash
   }
 }

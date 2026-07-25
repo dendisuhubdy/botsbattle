@@ -15,6 +15,7 @@ const config: TronConfig = {
   confirmations: 19,
   sweepMinMicros: 20_000_000n,
   hotWalletAddress: 'TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH',
+  hotWalletIndex: 0,
   xpub: 'xpub-not-used-here',
 }
 
