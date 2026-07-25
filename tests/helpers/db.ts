@@ -53,7 +53,8 @@ export function errorChain(err: unknown): string {
 /** Wipe all data and restore the seeded singleton house accounts. */
 export async function truncateAll(db: Db): Promise<void> {
   await db.execute(sql`
-    TRUNCATE ledger_entries, ledger_transactions, settlements, bets, accounts, fights,
+    TRUNCATE deposits, deposit_addresses, signer_jobs, chain_cursors,
+             ledger_entries, ledger_transactions, settlements, bets, accounts, fights,
              sessions, users
     RESTART IDENTITY CASCADE
   `)
