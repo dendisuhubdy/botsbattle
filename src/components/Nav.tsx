@@ -10,7 +10,7 @@ export async function Nav() {
 
   return (
     <nav>
-      <Link href="/">Fights</Link>
+      <Link href="/fights">Fights</Link>
       {' · '}
       {user ? (
         <>

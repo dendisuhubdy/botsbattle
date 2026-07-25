@@ -1,0 +1,524 @@
+/*
+ * Landing page styles. Scoped as a CSS Module — none of these class names
+ * leak into globals.css, so /admin, /account, /deposit, /withdraw (which
+ * still use the bare element selectors in globals.css) are unaffected.
+ */
+
+.landing {
+  --ink: #f3efe6;
+  --ink-dim: #b8b2a6;
+  --void: #0a0a0d;
+  --void-raised: #131316;
+  --void-line: #232327;
+  --hazard: #f4c518;
+  --hazard-ink: #1a1500;
+  --danger: #e2402c;
+  --danger-panel: #2a1310;
+  --ok: #4fd67a;
+
+  margin: -1.5rem;
+  padding: 0 0 3rem;
+  background: var(--void);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  overflow-x: hidden;
+}
+
+.landing :where(h1, h2, h3) {
+  font-family: 'Arial Black', 'Helvetica Neue', system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  line-height: 1.02;
+  margin: 0;
+}
+
+.landing a {
+  color: inherit;
+}
+
+.landing a:focus-visible,
+.landing button:focus-visible {
+  outline: 3px solid var(--hazard);
+  outline-offset: 2px;
+}
+
+.mono {
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+}
+
+/* ---------- hazard tape divider ---------- */
+
+.tape {
+  height: 0.6rem;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--hazard),
+    var(--hazard) 1.2rem,
+    var(--hazard-ink) 1.2rem,
+    var(--hazard-ink) 2.4rem
+  );
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .tape {
+    background-size: 200% 100%;
+    animation: crawl 14s linear infinite;
+  }
+}
+
+@keyframes crawl {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: -6.8rem 0;
+  }
+}
+
+/* ---------- hero ---------- */
+
+.hero {
+  padding: 3rem 1.5rem 2.5rem;
+  display: grid;
+  gap: 2rem;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  align-items: center;
+  background:
+    radial-gradient(ellipse 60% 80% at 100% 0%, rgba(244, 197, 24, 0.12), transparent),
+    var(--void);
+}
+
+@media (max-width: 44rem) {
+  .hero {
+    grid-template-columns: 1fr;
+    padding: 2rem 1.25rem;
+  }
+}
+
+.kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hazard);
+  margin-bottom: 1rem;
+}
+
+.kicker::before {
+  content: '';
+  width: 0.55rem;
+  height: 0.55rem;
+  background: var(--hazard);
+  display: inline-block;
+  transform: rotate(45deg);
+}
+
+.title {
+  font-size: clamp(2.4rem, 6vw, 4.2rem);
+  color: var(--ink);
+}
+
+.titleAccent {
+  color: var(--hazard);
+  -webkit-text-stroke: 1px var(--void-line);
+}
+
+.lede {
+  margin: 1.25rem 0 0;
+  max-width: 38rem;
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--ink-dim);
+}
+
+.lede strong {
+  color: var(--ink);
+}
+
+.ctaRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 1.75rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1.5rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  border: 2px solid transparent;
+  clip-path: polygon(0 0, 100% 0, 100% 70%, 92% 100%, 0 100%);
+  transition: transform 0.15s ease;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .btn:hover {
+    transform: translateY(-2px);
+  }
+}
+
+.btnPrimary {
+  background: var(--hazard);
+  color: var(--hazard-ink);
+}
+
+.btnGhost {
+  background: transparent;
+  border-color: var(--void-line);
+  color: var(--ink);
+}
+
+.btnGhost:hover {
+  border-color: var(--ink-dim);
+}
+
+.heroArt {
+  width: 100%;
+  height: auto;
+  max-width: 26rem;
+  justify-self: center;
+}
+
+@media (max-width: 44rem) {
+  .heroArt {
+    max-width: 16rem;
+  }
+}
+
+/* ---------- stats ---------- */
+
+.stats {
+  padding: 2rem 1.5rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 1px;
+  background: var(--void-line);
+  border-top: 1px solid var(--void-line);
+  border-bottom: 1px solid var(--void-line);
+}
+
+.statTile {
+  background: var(--void-raised);
+  padding: 1.5rem 1.5rem;
+}
+
+.statValue {
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--hazard);
+  display: block;
+}
+
+.statLabel {
+  color: var(--ink-dim);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ---------- section shell ---------- */
+
+.section {
+  padding: 3.5rem 1.5rem;
+  max-width: 68rem;
+  margin: 0 auto;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.75rem;
+}
+
+.sectionTitle {
+  font-size: clamp(1.5rem, 3.4vw, 2.1rem);
+}
+
+.sectionNote {
+  color: var(--ink-dim);
+  font-size: 0.9rem;
+  max-width: 24rem;
+}
+
+/* ---------- fight cards ---------- */
+
+.fightGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 1.25rem;
+}
+
+.fightCard {
+  position: relative;
+  background: var(--void-raised);
+  border: 1px solid var(--void-line);
+  padding: 1.25rem 1.25rem 1.4rem;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+.fightCard::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid transparent;
+  pointer-events: none;
+  transition: border-color 0.15s ease;
+}
+
+.fightCard:hover::before,
+.fightCard:focus-visible::before {
+  border-color: var(--hazard);
+}
+
+.fightLeague {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+}
+
+.liveBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ok);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  float: right;
+}
+
+.liveDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .liveDot {
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.fightNames {
+  font-family: 'Arial Black', 'Helvetica Neue', system-ui, sans-serif;
+  font-size: 1.25rem;
+  text-transform: uppercase;
+  margin: 0.6rem 0 1rem;
+  line-height: 1.15;
+}
+
+.fightMeta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  border-top: 1px dashed var(--void-line);
+  padding-top: 0.9rem;
+}
+
+.fightMeta dt {
+  color: var(--ink-dim);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fightMeta dd {
+  margin: 0.15rem 0 0;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+}
+
+.emptyState {
+  border: 1px dashed var(--void-line);
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  color: var(--ink-dim);
+}
+
+.emptyState p {
+  max-width: 30rem;
+  margin: 0.5rem auto 0;
+}
+
+/* ---------- how it works ---------- */
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1.5rem;
+  counter-reset: step;
+}
+
+.step {
+  position: relative;
+  padding-left: 3rem;
+}
+
+.step::before {
+  counter-increment: step;
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: -0.2rem;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--hazard);
+}
+
+.step h3 {
+  font-size: 1rem;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-bottom: 0.4rem;
+}
+
+.step p {
+  color: var(--ink-dim);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.rakeStrip {
+  margin-top: 2rem;
+  padding: 1rem 1.25rem;
+  background: var(--void-raised);
+  border-left: 3px solid var(--hazard);
+  font-size: 0.9rem;
+  color: var(--ink-dim);
+}
+
+.rakeStrip strong {
+  color: var(--ink);
+}
+
+/* ---------- funding ---------- */
+
+.fundingGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.25rem;
+}
+
+.fundingCard {
+  background: var(--void-raised);
+  border: 1px solid var(--void-line);
+  padding: 1.25rem;
+}
+
+.fundingCard h3 {
+  font-size: 0.95rem;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-bottom: 0.5rem;
+}
+
+.fundingCard p {
+  color: var(--ink-dim);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.fundingCard code {
+  color: var(--hazard);
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+}
+
+/* ---------- risk / notices ---------- */
+
+.notice {
+  background: var(--danger-panel);
+  border-top: 1px solid var(--void-line);
+  border-bottom: 1px solid var(--void-line);
+}
+
+.noticeInner {
+  max-width: 68rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+.noticeTitle {
+  color: var(--danger);
+  font-size: clamp(1.4rem, 3vw, 1.9rem);
+  margin-bottom: 1.25rem;
+}
+
+.noticeList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.25rem;
+  list-style: none;
+  margin: 0 0 1.5rem;
+  padding: 0;
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.noticeList li {
+  padding-left: 1.4rem;
+  position: relative;
+}
+
+.noticeList li::before {
+  content: '!';
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-weight: 900;
+  color: var(--danger);
+}
+
+.responsible {
+  font-size: 0.88rem;
+  color: var(--ink-dim);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 1.25rem;
+  max-width: 46rem;
+}
+
+/* ---------- final cta ---------- */
+
+.finalCta {
+  padding: 3.5rem 1.5rem 1rem;
+  text-align: center;
+}
+
+.finalCta h2 {
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  margin-bottom: 1.25rem;
+}
+
+.finalCta .ctaRow {
+  justify-content: center;
+}
