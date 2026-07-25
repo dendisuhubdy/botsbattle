@@ -2363,9 +2363,16 @@ export async function placeBet(db: Db, args: PlaceBetArgs): Promise<PlaceBetResu
       .limit(1)
     if (existing.length) return { betId: existing[0].id, replayed: true }
 
-    // Serialise every bet on this fight against every other one.
+    // Serialise every bet on this fight against every other one. The lock-time comparison
+    // happens in SQL so it uses the database clock and needs no extra round trip.
+    // (A `SELECT now()` through raw `execute` returns a string, not a Date.)
     const locked = await tx
-      .select({ id: fights.id, status: fights.status, lockAt: fights.lockAt })
+      .select({
+        id: fights.id,
+        status: fights.status,
+        lockAt: fights.lockAt,
+        pastLock: sql<boolean>`${fights.lockAt} <= now()`,
+      })
       .from(fights)
       .where(eq(fights.id, args.fightId))
       .for('update')
@@ -2378,11 +2385,8 @@ export async function placeBet(db: Db, args: PlaceBetArgs): Promise<PlaceBetResu
       throw new BetError(`fight ${args.fightId} is ${fight.status}, not OPEN`, 'FIGHT_NOT_OPEN')
     }
 
-    const [{ now }] = await tx
-      .execute<{ now: Date }>(sql`SELECT now() AS now`)
-      .then((r) => r.rows)
-    if (fight.lockAt.getTime() <= now.getTime()) {
-      throw new BetError(`fight ${args.fightId} locked at ${fight.lockAt.toISOString()}`, 'FIGHT_LOCKED')
+    if (fight.pastLock) {
+      throw new BetError(`fight ${args.fightId} locked at ${fight.lockAt}`, 'FIGHT_LOCKED')
     }
 
     const userAccount = await userAvailableAccount(tx, args.userId)
