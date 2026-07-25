@@ -1,0 +1,18 @@
+import { defineConfig } from 'vitest/config'
+import { fileURLToPath } from 'node:url'
+
+export default defineConfig({
+  test: {
+    environment: 'node',
+    include: ['tests/**/*.test.ts'],
+    // Every suite shares one Postgres instance, so nothing may run concurrently.
+    pool: 'forks',
+    maxWorkers: 1,
+    fileParallelism: false,
+    testTimeout: 30_000,
+    setupFiles: ['dotenv/config'],
+  },
+  resolve: {
+    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+  },
+})

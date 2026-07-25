@@ -168,7 +168,7 @@ services:
       POSTGRES_PASSWORD: botsbattle
       POSTGRES_DB: botsbattle
     ports:
-      - "5433:5432"
+      - "5434:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -184,8 +184,8 @@ volumes:
 `.env.example`:
 
 ```
-DATABASE_URL=postgres://botsbattle:botsbattle@localhost:5433/botsbattle
-TEST_DATABASE_URL=postgres://botsbattle:botsbattle@localhost:5433/botsbattle_test
+DATABASE_URL=postgres://botsbattle:botsbattle@localhost:5434/botsbattle
+TEST_DATABASE_URL=postgres://botsbattle:botsbattle@localhost:5434/botsbattle_test
 ```
 
 `.gitignore`:
@@ -465,7 +465,7 @@ import { runMigrations } from '@/lib/db/migrate'
 
 const TEST_URL =
   process.env.TEST_DATABASE_URL ??
-  'postgres://botsbattle:botsbattle@localhost:5433/botsbattle_test'
+  'postgres://botsbattle:botsbattle@localhost:5434/botsbattle_test'
 
 let handle: { db: Db; pool: Pool } | null = null
 
