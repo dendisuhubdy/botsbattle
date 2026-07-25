@@ -997,4 +997,695 @@ git commit -m "feat: TronGrid client joining transfer discovery with event indic
 git push origin main
 ```
 
+---
+
+## Task 4: Schema and deposit address assignment
+
+**Files:**
+- Create: `migrations/0004_deposits.sql`
+- Modify: `src/lib/db/schema.ts`, `tests/helpers/db.ts`
+- Create: `src/lib/deposits/addresses.ts`
+- Test: `tests/deposits/addresses.test.ts`
+
+**Interfaces:**
+- Consumes: `deriveAddress`, `Executor`, `Db`
+- Produces (`src/lib/deposits/addresses.ts`):
+  - `class DepositAddressError extends Error { code: 'ALREADY_ASSIGNED' }`
+  - `assignDepositAddress(db: Db, args: { userId: string; xpub: string }): Promise<{ address: string; derivationIndex: number; created: boolean }>`
+  - `getDepositAddress(x: Executor, userId: string): Promise<{ address: string; derivationIndex: number } | null>`
+  - `listDepositAddresses(x: Executor): Promise<Array<{ userId: string; derivationIndex: number; address: string }>>`
+
+Index allocation must be gap-free and race-free: two simultaneous requests from the same user
+must not burn two indices, and two different users must never share one. The implementation
+takes a transaction-scoped advisory lock so `MAX(derivation_index) + 1` is safe.
+
+- [ ] **Step 1: Write the migration**
+
+`migrations/0004_deposits.sql`:
+
+```sql
+CREATE TYPE deposit_status AS ENUM ('PENDING', 'CREDITED');
+CREATE TYPE signer_job_status AS ENUM ('PENDING', 'CLAIMED', 'DONE', 'FAILED');
+
+CREATE TABLE deposit_addresses (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id          UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE RESTRICT,
+  derivation_index INTEGER NOT NULL UNIQUE CHECK (derivation_index >= 0),
+  address          TEXT NOT NULL UNIQUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE deposits (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tx_hash      TEXT NOT NULL,
+  log_index    INTEGER NOT NULL,
+  address      TEXT NOT NULL REFERENCES deposit_addresses(address) ON DELETE RESTRICT,
+  from_address TEXT NOT NULL,
+  amount       BIGINT NOT NULL CHECK (amount > 0),
+  block_number BIGINT NOT NULL,
+  status       deposit_status NOT NULL DEFAULT 'PENDING',
+  ledger_tx_id UUID REFERENCES ledger_transactions(id) ON DELETE RESTRICT,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  credited_at  TIMESTAMPTZ,
+  CONSTRAINT deposits_chain_uq UNIQUE (tx_hash, log_index),
+  CONSTRAINT deposits_credited_has_ledger CHECK (
+    (status = 'CREDITED' AND ledger_tx_id IS NOT NULL AND credited_at IS NOT NULL)
+    OR (status = 'PENDING' AND ledger_tx_id IS NULL AND credited_at IS NULL)
+  )
+);
+
+CREATE INDEX deposits_status_idx  ON deposits (status);
+CREATE INDEX deposits_address_idx ON deposits (address);
+
+CREATE TABLE signer_jobs (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind         TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  payload      JSONB NOT NULL,
+  status       signer_job_status NOT NULL DEFAULT 'PENDING',
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  last_error   TEXT,
+  tx_hash      TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  claimed_at   TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX signer_jobs_status_idx ON signer_jobs (status, created_at);
+
+-- Named high-water marks so the poller need not rescan from genesis.
+CREATE TABLE chain_cursors (
+  name       TEXT PRIMARY KEY,
+  value      BIGINT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+- [ ] **Step 2: Extend the Drizzle schema**
+
+Append to `src/lib/db/schema.ts`:
+
+```ts
+export const depositStatus = pgEnum('deposit_status', ['PENDING', 'CREDITED'])
+export const signerJobStatus = pgEnum('signer_job_status', [
+  'PENDING',
+  'CLAIMED',
+  'DONE',
+  'FAILED',
+])
+
+export const depositAddresses = pgTable('deposit_addresses', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id')
+    .notNull()
+    .unique()
+    .references(() => users.id),
+  derivationIndex: integer('derivation_index').notNull().unique(),
+  address: text('address').notNull().unique(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const deposits = pgTable(
+  'deposits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    txHash: text('tx_hash').notNull(),
+    logIndex: integer('log_index').notNull(),
+    address: text('address')
+      .notNull()
+      .references(() => depositAddresses.address),
+    fromAddress: text('from_address').notNull(),
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    blockNumber: bigint('block_number', { mode: 'bigint' }).notNull(),
+    status: depositStatus('status').notNull().default('PENDING'),
+    ledgerTxId: uuid('ledger_tx_id').references(() => ledgerTransactions.id),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    creditedAt: timestamp('credited_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('deposits_chain_uq').on(t.txHash, t.logIndex),
+    index('deposits_status_idx').on(t.status),
+    index('deposits_address_idx').on(t.address),
+  ],
+)
+
+export const signerJobs = pgTable(
+  'signer_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: text('kind').notNull(),
+    idempotencyKey: text('idempotency_key').notNull().unique(),
+    payload: jsonb('payload').notNull(),
+    status: signerJobStatus('status').notNull().default('PENDING'),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    txHash: text('tx_hash'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t) => [index('signer_jobs_status_idx').on(t.status, t.createdAt)],
+)
+
+export const chainCursors = pgTable('chain_cursors', {
+  name: text('name').primaryKey(),
+  value: bigint('value', { mode: 'bigint' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+```
+
+Add `uniqueIndex` to the existing `drizzle-orm/pg-core` import.
+
+- [ ] **Step 3: Extend the truncation helper**
+
+In `tests/helpers/db.ts`, replace the `TRUNCATE` statement with:
+
+```ts
+  await db.execute(sql`
+    TRUNCATE deposits, deposit_addresses, signer_jobs, chain_cursors,
+             ledger_entries, ledger_transactions, settlements, bets, accounts, fights,
+             sessions, users
+    RESTART IDENTITY CASCADE
+  `)
+```
+
+- [ ] **Step 4: Write the failing test**
+
+`tests/deposits/addresses.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { HDKey } from '@scure/bip32'
+import { mnemonicToSeedSync } from '@scure/bip39'
+import { testDb, truncateAll } from '../helpers/db'
+import { makeUser } from '../helpers/fixtures'
+import type { Db } from '@/lib/db/client'
+import { ACCOUNT_PATH, deriveAddress } from '@/lib/tron/address'
+import {
+  assignDepositAddress,
+  getDepositAddress,
+  listDepositAddresses,
+} from '@/lib/deposits/addresses'
+
+const MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+const XPUB = HDKey.fromMasterSeed(mnemonicToSeedSync(MNEMONIC)).derive(ACCOUNT_PATH)
+  .publicExtendedKey
+
+describe('deposit addresses', () => {
+  let db: Db
+
+  beforeAll(async () => {
+    ;({ db } = await testDb())
+  })
+
+  beforeEach(async () => {
+    await truncateAll(db)
+  })
+
+  it('assigns index 0 to the first user', async () => {
+    const user = await makeUser(db)
+    const assigned = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+
+    expect(assigned.derivationIndex).toBe(0)
+    expect(assigned.created).toBe(true)
+    expect(assigned.address).toBe(deriveAddress(XPUB, 0))
+  })
+
+  it('gives each user the next index without gaps', async () => {
+    const users = [await makeUser(db), await makeUser(db), await makeUser(db)]
+    const indices: number[] = []
+    for (const user of users) {
+      indices.push((await assignDepositAddress(db, { userId: user, xpub: XPUB })).derivationIndex)
+    }
+    expect(indices).toEqual([0, 1, 2])
+  })
+
+  it('is idempotent for one user', async () => {
+    const user = await makeUser(db)
+    const first = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+    const second = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+
+    expect(second.created).toBe(false)
+    expect(second.address).toBe(first.address)
+    expect(second.derivationIndex).toBe(first.derivationIndex)
+  })
+
+  it('never issues one index twice under concurrency', async () => {
+    // Ten different users requesting simultaneously must receive ten distinct indices.
+    const users = await Promise.all(Array.from({ length: 10 }, () => makeUser(db)))
+    const results = await Promise.all(
+      users.map((userId) => assignDepositAddress(db, { userId, xpub: XPUB })),
+    )
+
+    expect(new Set(results.map((r) => r.derivationIndex)).size).toBe(10)
+    expect(new Set(results.map((r) => r.address)).size).toBe(10)
+    expect(results.map((r) => r.derivationIndex).sort((a, b) => a - b)).toEqual([
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+    ])
+  })
+
+  it('never issues one index twice when the same user races itself', async () => {
+    const user = await makeUser(db)
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => assignDepositAddress(db, { userId: user, xpub: XPUB })),
+    )
+    expect(new Set(results.map((r) => r.address)).size).toBe(1)
+    expect(await listDepositAddresses(db)).toHaveLength(1)
+  })
+
+  it('returns null for a user with no address yet', async () => {
+    expect(await getDepositAddress(db, await makeUser(db))).toBeNull()
+  })
+
+  it('reads back an assigned address', async () => {
+    const user = await makeUser(db)
+    const assigned = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+    expect(await getDepositAddress(db, user)).toEqual({
+      address: assigned.address,
+      derivationIndex: assigned.derivationIndex,
+    })
+  })
+})
+```
+
+- [ ] **Step 5: Run the test to verify it fails**
+
+Run: `pnpm test tests/deposits/addresses.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/deposits/addresses"`.
+
+- [ ] **Step 6: Write the implementation**
+
+`src/lib/deposits/addresses.ts`:
+
+```ts
+import { eq, sql } from 'drizzle-orm'
+import type { Db, Executor } from '@/lib/db/client'
+import { depositAddresses } from '@/lib/db/schema'
+import { deriveAddress } from '@/lib/tron/address'
+
+/** Arbitrary constant identifying the index-allocation lock. */
+const INDEX_LOCK_KEY = 8_112_026
+
+export type AssignedAddress = { address: string; derivationIndex: number; created: boolean }
+
+export async function getDepositAddress(
+  x: Executor,
+  userId: string,
+): Promise<{ address: string; derivationIndex: number } | null> {
+  const rows = await x
+    .select({ address: depositAddresses.address, derivationIndex: depositAddresses.derivationIndex })
+    .from(depositAddresses)
+    .where(eq(depositAddresses.userId, userId))
+    .limit(1)
+  return rows.length ? rows[0] : null
+}
+
+/**
+ * Assign this user their permanent deposit address, or return the existing one.
+ *
+ * Allocation takes a transaction-scoped advisory lock so `MAX(index) + 1` cannot race.
+ * Handing two users the same index would point both at one address and make deposits
+ * indistinguishable, so the lock is correctness, not throughput tuning.
+ */
+export async function assignDepositAddress(
+  db: Db,
+  args: { userId: string; xpub: string },
+): Promise<AssignedAddress> {
+  const existing = await getDepositAddress(db, args.userId)
+  if (existing) return { ...existing, created: false }
+
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${INDEX_LOCK_KEY})`)
+
+    // Re-check under the lock: a racing call may have assigned it since our first read.
+    const raced = await getDepositAddress(tx, args.userId)
+    if (raced) return { ...raced, created: false }
+
+    const [{ next }] = await tx
+      .execute<{ next: number }>(
+        sql`SELECT COALESCE(MAX(derivation_index) + 1, 0)::int AS next FROM deposit_addresses`,
+      )
+      .then((r) => r.rows)
+
+    const address = deriveAddress(args.xpub, next)
+
+    await tx
+      .insert(depositAddresses)
+      .values({ userId: args.userId, derivationIndex: next, address })
+
+    return { address, derivationIndex: next, created: true }
+  })
+}
+
+export async function listDepositAddresses(
+  x: Executor,
+): Promise<Array<{ userId: string; derivationIndex: number; address: string }>> {
+  return x
+    .select({
+      userId: depositAddresses.userId,
+      derivationIndex: depositAddresses.derivationIndex,
+      address: depositAddresses.address,
+    })
+    .from(depositAddresses)
+    .orderBy(depositAddresses.derivationIndex)
+}
+```
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+```bash
+pnpm test tests/deposits/addresses.test.ts
+pnpm typecheck
+```
+
+Expected: PASS, 7 tests. Run the file three times — the two concurrency tests are the point of
+this task, and an intermittent failure there is a real defect, not flake.
+
+- [ ] **Step 8: Commit and push**
+
+```bash
+git add migrations/0004_deposits.sql src/lib/db/schema.ts src/lib/deposits tests/deposits tests/helpers/db.ts
+git commit -m "feat: deposit address assignment with race-free index allocation"
+git push origin main
+```
+
+---
+
+## Task 5: Crediting a confirmed deposit
+
+**Files:**
+- Create: `src/lib/deposits/credit.ts`
+- Test: `tests/deposits/credit.test.ts`
+
+**Interfaces:**
+- Consumes: `postTransaction`, `houseAccount`, `userAvailableAccount`, `Trc20Transfer`, `Db`
+- Produces (`src/lib/deposits/credit.ts`):
+  - `type RecordResult = { depositId: string; alreadyKnown: boolean }`
+  - `recordSeenTransfer(db: Db, transfer: Trc20Transfer): Promise<RecordResult | null>` — `null` when the address is not one of ours
+  - `creditConfirmedDeposits(db: Db, headBlock: number, confirmations: number): Promise<string[]>` — returns credited deposit ids
+  - `class DepositError extends Error { code: 'UNKNOWN_ADDRESS' }`
+
+The ledger legs are identical to an admin credit — `hot_wallet −amount`, `user_available +amount`
+— and the idempotency key is `deposit:{txHash}:{logIndex}`.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/deposits/credit.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { sql } from 'drizzle-orm'
+import { HDKey } from '@scure/bip32'
+import { mnemonicToSeedSync } from '@scure/bip39'
+import { testDb, truncateAll } from '../helpers/db'
+import { makeUser } from '../helpers/fixtures'
+import type { Db } from '@/lib/db/client'
+import { deposits as depositsTable } from '@/lib/db/schema'
+import { ACCOUNT_PATH } from '@/lib/tron/address'
+import { assignDepositAddress } from '@/lib/deposits/addresses'
+import { recordSeenTransfer, creditConfirmedDeposits } from '@/lib/deposits/credit'
+import { userBalance, balanceOf, houseAccount } from '@/lib/ledger/accounts'
+import type { Trc20Transfer } from '@/lib/tron/client'
+
+const MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+const XPUB = HDKey.fromMasterSeed(mnemonicToSeedSync(MNEMONIC)).derive(ACCOUNT_PATH)
+  .publicExtendedKey
+const USDT = 1_000_000n
+
+function transfer(over: Partial<Trc20Transfer> & { to: string }): Trc20Transfer {
+  return {
+    txHash: 'aa'.repeat(32),
+    logIndex: 0,
+    from: 'TEPSrSYPDSQ7yXpMFPq91Fb1QEWpMkRGfn',
+    amountMicros: 50n * USDT,
+    blockNumber: 100,
+    ...over,
+  }
+}
+
+describe('deposit crediting', () => {
+  let db: Db
+  let user: string
+  let address: string
+
+  beforeAll(async () => {
+    ;({ db } = await testDb())
+  })
+
+  beforeEach(async () => {
+    await truncateAll(db)
+    user = await makeUser(db)
+    address = (await assignDepositAddress(db, { userId: user, xpub: XPUB })).address
+  })
+
+  it('records a seen transfer as PENDING without crediting', async () => {
+    const result = await recordSeenTransfer(db, transfer({ to: address }))
+
+    expect(result).not.toBeNull()
+    expect(result!.alreadyKnown).toBe(false)
+    expect(await userBalance(db, user)).toBe(0n)
+
+    const rows = await db.select().from(depositsTable)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].status).toBe('PENDING')
+  })
+
+  it('ignores a transfer to an address we do not own', async () => {
+    const result = await recordSeenTransfer(db, transfer({ to: 'TUnknownAddress00000000000000000' }))
+    expect(result).toBeNull()
+    expect(await db.select().from(depositsTable)).toHaveLength(0)
+  })
+
+  it('does not credit before the confirmation threshold', async () => {
+    await recordSeenTransfer(db, transfer({ to: address, blockNumber: 100 }))
+
+    // head 118 means 18 confirmations for a block-100 transfer; the threshold is 19.
+    expect(await creditConfirmedDeposits(db, 118, 19)).toEqual([])
+    expect(await userBalance(db, user)).toBe(0n)
+  })
+
+  it('credits once the threshold is reached', async () => {
+    await recordSeenTransfer(db, transfer({ to: address, blockNumber: 100 }))
+
+    const credited = await creditConfirmedDeposits(db, 119, 19)
+    expect(credited).toHaveLength(1)
+
+    expect(await userBalance(db, user)).toBe(50n * USDT)
+    expect(await balanceOf(db, await houseAccount(db, 'hot_wallet'))).toBe(-50n * USDT)
+
+    const [row] = await db.select().from(depositsTable)
+    expect(row.status).toBe('CREDITED')
+    expect(row.ledgerTxId).not.toBeNull()
+    expect(row.creditedAt).not.toBeNull()
+  })
+
+  it('is idempotent on (tx_hash, log_index): reseeing writes nothing new', async () => {
+    const t = transfer({ to: address, blockNumber: 100 })
+    await recordSeenTransfer(db, t)
+    const second = await recordSeenTransfer(db, t)
+
+    expect(second!.alreadyKnown).toBe(true)
+    expect(await db.select().from(depositsTable)).toHaveLength(1)
+  })
+
+  it('does not double-credit when crediting runs twice', async () => {
+    await recordSeenTransfer(db, transfer({ to: address, blockNumber: 100 }))
+
+    await creditConfirmedDeposits(db, 200, 19)
+    const secondRun = await creditConfirmedDeposits(db, 200, 19)
+
+    expect(secondRun).toEqual([])
+    expect(await userBalance(db, user)).toBe(50n * USDT)
+  })
+
+  it('treats two transfers sharing a tx hash as distinct deposits', async () => {
+    await recordSeenTransfer(db, transfer({ to: address, txHash: 'shared'.padEnd(64, '0'), logIndex: 0, amountMicros: 10n * USDT }))
+    await recordSeenTransfer(db, transfer({ to: address, txHash: 'shared'.padEnd(64, '0'), logIndex: 1, amountMicros: 20n * USDT }))
+
+    await creditConfirmedDeposits(db, 200, 19)
+    expect(await userBalance(db, user)).toBe(30n * USDT)
+  })
+
+  it('credits several users independently in one run', async () => {
+    const other = await makeUser(db)
+    const otherAddress = (await assignDepositAddress(db, { userId: other, xpub: XPUB })).address
+
+    await recordSeenTransfer(db, transfer({ to: address, txHash: 'a'.repeat(64), amountMicros: 10n * USDT }))
+    await recordSeenTransfer(db, transfer({ to: otherAddress, txHash: 'b'.repeat(64), amountMicros: 7n * USDT }))
+
+    expect(await creditConfirmedDeposits(db, 200, 19)).toHaveLength(2)
+    expect(await userBalance(db, user)).toBe(10n * USDT)
+    expect(await userBalance(db, other)).toBe(7n * USDT)
+  })
+
+  it('leaves every ledger transaction balanced', async () => {
+    await recordSeenTransfer(db, transfer({ to: address }))
+    await creditConfirmedDeposits(db, 200, 19)
+
+    const unbalanced = await db.execute<{ tx_id: string }>(
+      sql`SELECT tx_id FROM ledger_entries GROUP BY tx_id HAVING SUM(amount) <> 0`,
+    )
+    expect(unbalanced.rows).toEqual([])
+  })
+})
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `pnpm test tests/deposits/credit.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/deposits/credit"`.
+
+- [ ] **Step 3: Write the implementation**
+
+`src/lib/deposits/credit.ts`:
+
+```ts
+import { and, eq, lte, sql } from 'drizzle-orm'
+import type { Db } from '@/lib/db/client'
+import { depositAddresses, deposits } from '@/lib/db/schema'
+import { houseAccount, userAvailableAccount } from '@/lib/ledger/accounts'
+import { postTransaction } from '@/lib/ledger/post'
+import type { Trc20Transfer } from '@/lib/tron/client'
+
+export class DepositError extends Error {
+  constructor(
+    message: string,
+    readonly code: 'UNKNOWN_ADDRESS',
+  ) {
+    super(message)
+    this.name = 'DepositError'
+  }
+}
+
+export type RecordResult = { depositId: string; alreadyKnown: boolean }
+
+/**
+ * Persist a transfer we have observed on chain. Does not move money — crediting waits
+ * for confirmations. Returns `null` when the destination is not one of our addresses,
+ * which is normal: TronGrid can return transfers we never asked about.
+ */
+export async function recordSeenTransfer(
+  db: Db,
+  transfer: Trc20Transfer,
+): Promise<RecordResult | null> {
+  const owned = await db
+    .select({ address: depositAddresses.address })
+    .from(depositAddresses)
+    .where(eq(depositAddresses.address, transfer.to))
+    .limit(1)
+  if (!owned.length) return null
+
+  const inserted = await db
+    .insert(deposits)
+    .values({
+      txHash: transfer.txHash,
+      logIndex: transfer.logIndex,
+      address: transfer.to,
+      fromAddress: transfer.from,
+      amount: transfer.amountMicros,
+      blockNumber: BigInt(transfer.blockNumber),
+    })
+    .onConflictDoNothing({ target: [deposits.txHash, deposits.logIndex] })
+    .returning({ id: deposits.id })
+
+  if (inserted.length) return { depositId: inserted[0].id, alreadyKnown: false }
+
+  const existing = await db
+    .select({ id: deposits.id })
+    .from(deposits)
+    .where(and(eq(deposits.txHash, transfer.txHash), eq(deposits.logIndex, transfer.logIndex)))
+    .limit(1)
+  return { depositId: existing[0].id, alreadyKnown: true }
+}
+
+/**
+ * Credit every PENDING deposit buried at least `confirmations` blocks deep.
+ *
+ * Each deposit is its own transaction: one failure must not roll back the others, and the
+ * ledger idempotency key means a retry after a partial run is safe.
+ */
+export async function creditConfirmedDeposits(
+  db: Db,
+  headBlock: number,
+  confirmations: number,
+): Promise<string[]> {
+  const maxBlock = BigInt(headBlock - confirmations + 1)
+
+  const ready = await db
+    .select({
+      id: deposits.id,
+      txHash: deposits.txHash,
+      logIndex: deposits.logIndex,
+      amount: deposits.amount,
+      userId: depositAddresses.userId,
+    })
+    .from(deposits)
+    .innerJoin(depositAddresses, eq(depositAddresses.address, deposits.address))
+    .where(and(eq(deposits.status, 'PENDING'), lte(deposits.blockNumber, maxBlock)))
+
+  const credited: string[] = []
+
+  for (const deposit of ready) {
+    await db.transaction(async (tx) => {
+      // Re-read under the row lock so two workers cannot both credit this deposit.
+      const locked = await tx
+        .select({ status: deposits.status })
+        .from(deposits)
+        .where(eq(deposits.id, deposit.id))
+        .for('update')
+        .limit(1)
+      if (!locked.length || locked[0].status !== 'PENDING') return
+
+      const [userAccount, hotWallet] = await Promise.all([
+        userAvailableAccount(tx, deposit.userId),
+        houseAccount(tx, 'hot_wallet'),
+      ])
+
+      const posted = await postTransaction(tx, {
+        kind: 'DEPOSIT',
+        idempotencyKey: `deposit:${deposit.txHash}:${deposit.logIndex}`,
+        metadata: {
+          depositId: deposit.id,
+          userId: deposit.userId,
+          txHash: deposit.txHash,
+          logIndex: deposit.logIndex,
+        },
+        legs: [
+          { accountId: hotWallet, amount: -deposit.amount },
+          { accountId: userAccount, amount: deposit.amount },
+        ],
+      })
+
+      await tx
+        .update(deposits)
+        .set({ status: 'CREDITED', ledgerTxId: posted.txId, creditedAt: sql`now()` })
+        .where(eq(deposits.id, deposit.id))
+
+      credited.push(deposit.id)
+    })
+  }
+
+  return credited
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+pnpm test tests/deposits/credit.test.ts
+pnpm typecheck
+```
+
+Expected: PASS, 9 tests.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add src/lib/deposits/credit.ts tests/deposits/credit.test.ts
+git commit -m "feat: idempotent deposit crediting after confirmation threshold"
+git push origin main
+```
+
 <!-- PLAN-CONTINUES -->
