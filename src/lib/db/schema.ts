@@ -8,6 +8,7 @@ import {
   timestamp,
   index,
   boolean,
+  integer,
 } from 'drizzle-orm/pg-core'
 
 export const accountKind = pgEnum('account_kind', [
@@ -73,4 +74,68 @@ export const sessions = pgTable('sessions', {
     .references(() => users.id, { onDelete: 'cascade' }),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const fightStatus = pgEnum('fight_status', [
+  'DRAFT',
+  'OPEN',
+  'LOCKED',
+  'SETTLED',
+  'VOIDED',
+])
+export const fightOutcome = pgEnum('fight_outcome', ['A', 'B', 'VOID'])
+export const betSide = pgEnum('bet_side', ['A', 'B'])
+
+export const fights = pgTable('fights', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  leagueName: text('league_name').notNull(),
+  fighterA: text('fighter_a').notNull(),
+  fighterB: text('fighter_b').notNull(),
+  streamEmbedUrl: text('stream_embed_url'),
+  status: fightStatus('status').notNull().default('DRAFT'),
+  lockAt: timestamp('lock_at', { withTimezone: true }).notNull(),
+  rakeBps: integer('rake_bps').notNull().default(500),
+  outcome: fightOutcome('outcome'),
+  createdBy: uuid('created_by')
+    .notNull()
+    .references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  settledAt: timestamp('settled_at', { withTimezone: true }),
+})
+
+export const bets = pgTable(
+  'bets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    fightId: uuid('fight_id')
+      .notNull()
+      .references(() => fights.id),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    side: betSide('side').notNull(),
+    stake: bigint('stake', { mode: 'bigint' }).notNull(),
+    idempotencyKey: text('idempotency_key').notNull().unique(),
+    payout: bigint('payout', { mode: 'bigint' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('bets_fight_idx').on(t.fightId), index('bets_user_idx').on(t.userId)],
+)
+
+export const settlements = pgTable('settlements', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  fightId: uuid('fight_id')
+    .notNull()
+    .unique()
+    .references(() => fights.id),
+  outcome: fightOutcome('outcome').notNull(),
+  poolTotal: bigint('pool_total', { mode: 'bigint' }).notNull(),
+  winningPool: bigint('winning_pool', { mode: 'bigint' }).notNull(),
+  rake: bigint('rake', { mode: 'bigint' }).notNull(),
+  dust: bigint('dust', { mode: 'bigint' }).notNull(),
+  refunded: boolean('refunded').notNull(),
+  settledBy: uuid('settled_by')
+    .notNull()
+    .references(() => users.id),
+  settledAt: timestamp('settled_at', { withTimezone: true }).notNull().defaultNow(),
 })
