@@ -372,4 +372,629 @@ git commit -m "feat: Tron config and xpub deposit address derivation"
 git push origin main
 ```
 
+---
+
+## Task 2: TronClient interface and the fake
+
+Every rule in this slice is testable without a network because all chain access goes through
+one narrow interface. The fake is not a stub — it is a deterministic in-memory chain that
+tests drive.
+
+**Files:**
+- Create: `src/lib/tron/client.ts`, `src/lib/tron/fake.ts`
+- Test: `tests/tron/fake.test.ts`
+
+**Interfaces:**
+- Consumes: `hexToTronAddress` from Task 1
+- Produces (`src/lib/tron/client.ts`):
+  - `type Trc20Transfer = { txHash: string; logIndex: number; from: string; to: string; amountMicros: bigint; blockNumber: number }`
+  - `type TronClient = { headBlock(): Promise<number>; incomingTransfers(address: string, opts?: { sinceMs?: number }): Promise<Trc20Transfer[]>; trc20Balance(address: string): Promise<bigint>; trxBalance(address: string): Promise<bigint>; sendTrc20(args: SendArgs): Promise<string> }`
+  - `type SendArgs = { fromPrivateKeyHex: string; to: string; amountMicros: bigint }`
+  - `class TronError extends Error { code: 'RPC_FAILED' | 'BROADCAST_FAILED' | 'INSUFFICIENT_ENERGY' }`
+- Produces (`src/lib/tron/fake.ts`):
+  - `class FakeTron implements TronClient` with test controls:
+    - `setHead(n: number): void`
+    - `deposit(args: { to: string; amountMicros: bigint; blockNumber: number; txHash?: string; logIndex?: number; from?: string }): Trc20Transfer`
+    - `setTrxBalance(address: string, sun: bigint): void`
+    - `failNextSend(message: string): void`
+    - `readonly broadcasts: Array<{ from: string; to: string; amountMicros: bigint; txHash: string }>`
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/tron/fake.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { FakeTron } from '@/lib/tron/fake'
+import { TronError } from '@/lib/tron/client'
+
+const ADDR_A = 'TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH'
+const ADDR_B = 'TSeJkUh4Qv67VNFwY8LaAxERygNdy6NQZK'
+const USDT = 1_000_000n
+
+describe('FakeTron', () => {
+  it('starts at a known head and advances only when told', async () => {
+    const tron = new FakeTron()
+    expect(await tron.headBlock()).toBe(1000)
+    tron.setHead(1042)
+    expect(await tron.headBlock()).toBe(1042)
+  })
+
+  it('returns deposits addressed to the queried address only', async () => {
+    const tron = new FakeTron()
+    tron.deposit({ to: ADDR_A, amountMicros: 25n * USDT, blockNumber: 1001 })
+    tron.deposit({ to: ADDR_B, amountMicros: 5n * USDT, blockNumber: 1001 })
+
+    const forA = await tron.incomingTransfers(ADDR_A)
+    expect(forA).toHaveLength(1)
+    expect(forA[0]).toMatchObject({ to: ADDR_A, amountMicros: 25n * USDT, blockNumber: 1001 })
+  })
+
+  it('assigns distinct (txHash, logIndex) pairs automatically', async () => {
+    const tron = new FakeTron()
+    tron.deposit({ to: ADDR_A, amountMicros: 1n * USDT, blockNumber: 1001 })
+    tron.deposit({ to: ADDR_A, amountMicros: 2n * USDT, blockNumber: 1002 })
+
+    const transfers = await tron.incomingTransfers(ADDR_A)
+    const keys = transfers.map((t) => `${t.txHash}:${t.logIndex}`)
+    expect(new Set(keys).size).toBe(2)
+  })
+
+  it('supports two transfers sharing one transaction hash', async () => {
+    const tron = new FakeTron()
+    tron.deposit({ to: ADDR_A, amountMicros: 1n * USDT, blockNumber: 1001, txHash: 'shared', logIndex: 0 })
+    tron.deposit({ to: ADDR_A, amountMicros: 2n * USDT, blockNumber: 1001, txHash: 'shared', logIndex: 1 })
+
+    const transfers = await tron.incomingTransfers(ADDR_A)
+    expect(transfers.map((t) => t.logIndex).sort()).toEqual([0, 1])
+  })
+
+  it('tracks the TRC20 balance as deposits land and sends leave', async () => {
+    const tron = new FakeTron()
+    tron.deposit({ to: ADDR_A, amountMicros: 30n * USDT, blockNumber: 1001 })
+    expect(await tron.trc20Balance(ADDR_A)).toBe(30n * USDT)
+
+    await tron.sendTrc20({ fromPrivateKeyHex: 'aa'.repeat(32), to: ADDR_B, amountMicros: 10n * USDT })
+    // The fake attributes the send to the address matching the key it was given.
+    expect(tron.broadcasts).toHaveLength(1)
+    expect(tron.broadcasts[0]).toMatchObject({ to: ADDR_B, amountMicros: 10n * USDT })
+  })
+
+  it('reports TRX balance, defaulting to zero', async () => {
+    const tron = new FakeTron()
+    expect(await tron.trxBalance(ADDR_A)).toBe(0n)
+    tron.setTrxBalance(ADDR_A, 5_000_000n)
+    expect(await tron.trxBalance(ADDR_A)).toBe(5_000_000n)
+  })
+
+  it('can be told to fail the next broadcast', async () => {
+    const tron = new FakeTron()
+    tron.failNextSend('out of energy')
+
+    await expect(
+      tron.sendTrc20({ fromPrivateKeyHex: 'aa'.repeat(32), to: ADDR_B, amountMicros: 1n * USDT }),
+    ).rejects.toBeInstanceOf(TronError)
+
+    // The failure is consumed: the next send succeeds.
+    const hash = await tron.sendTrc20({
+      fromPrivateKeyHex: 'aa'.repeat(32),
+      to: ADDR_B,
+      amountMicros: 1n * USDT,
+    })
+    expect(hash).toMatch(/^[0-9a-f]+$/)
+  })
+})
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `pnpm test tests/tron/fake.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/tron/fake"`.
+
+- [ ] **Step 3: Write the interface**
+
+`src/lib/tron/client.ts`:
+
+```ts
+export type Trc20Transfer = {
+  txHash: string
+  logIndex: number
+  from: string
+  to: string
+  amountMicros: bigint
+  blockNumber: number
+}
+
+export type SendArgs = {
+  fromPrivateKeyHex: string
+  to: string
+  amountMicros: bigint
+}
+
+export class TronError extends Error {
+  constructor(
+    message: string,
+    readonly code: 'RPC_FAILED' | 'BROADCAST_FAILED' | 'INSUFFICIENT_ENERGY',
+  ) {
+    super(message)
+    this.name = 'TronError'
+  }
+}
+
+/**
+ * Every chain interaction the platform performs. Deliberately narrow: the fake in
+ * `fake.ts` must be able to implement all of it faithfully, or the tests are lying.
+ */
+export type TronClient = {
+  headBlock(): Promise<number>
+  /** TRC20 transfers *into* `address`, newest first. */
+  incomingTransfers(address: string, opts?: { sinceMs?: number }): Promise<Trc20Transfer[]>
+  trc20Balance(address: string): Promise<bigint>
+  /** TRX balance in SUN (1 TRX = 1e6 SUN), used to check sweep gas. */
+  trxBalance(address: string): Promise<bigint>
+  sendTrc20(args: SendArgs): Promise<string>
+}
+```
+
+- [ ] **Step 4: Write the fake**
+
+`src/lib/tron/fake.ts`:
+
+```ts
+import { TronWeb } from 'tronweb'
+import { TronError, type SendArgs, type TronClient, type Trc20Transfer } from './client'
+
+/**
+ * A deterministic in-memory chain. No randomness and no clock: transaction hashes are
+ * generated from a counter so tests reproduce exactly.
+ */
+export class FakeTron implements TronClient {
+  private head = 1000
+  private transfers: Trc20Transfer[] = []
+  private trc20: Map<string, bigint> = new Map()
+  private trx: Map<string, bigint> = new Map()
+  private counter = 0
+  private nextSendFailure: string | null = null
+
+  readonly broadcasts: Array<{ from: string; to: string; amountMicros: bigint; txHash: string }> = []
+
+  setHead(n: number): void {
+    this.head = n
+  }
+
+  setTrxBalance(address: string, sun: bigint): void {
+    this.trx.set(address, sun)
+  }
+
+  failNextSend(message: string): void {
+    this.nextSendFailure = message
+  }
+
+  deposit(args: {
+    to: string
+    amountMicros: bigint
+    blockNumber: number
+    txHash?: string
+    logIndex?: number
+    from?: string
+  }): Trc20Transfer {
+    const transfer: Trc20Transfer = {
+      txHash: args.txHash ?? `fake${(this.counter++).toString(16).padStart(60, '0')}`,
+      logIndex: args.logIndex ?? 0,
+      from: args.from ?? 'TSenderAddressPlaceholder00000000',
+      to: args.to,
+      amountMicros: args.amountMicros,
+      blockNumber: args.blockNumber,
+    }
+    this.transfers.push(transfer)
+    this.credit(args.to, args.amountMicros)
+    return transfer
+  }
+
+  private credit(address: string, amount: bigint): void {
+    this.trc20.set(address, (this.trc20.get(address) ?? 0n) + amount)
+  }
+
+  async headBlock(): Promise<number> {
+    return this.head
+  }
+
+  async incomingTransfers(address: string): Promise<Trc20Transfer[]> {
+    return this.transfers
+      .filter((t) => t.to === address)
+      .slice()
+      .sort((a, b) => b.blockNumber - a.blockNumber)
+  }
+
+  async trc20Balance(address: string): Promise<bigint> {
+    return this.trc20.get(address) ?? 0n
+  }
+
+  async trxBalance(address: string): Promise<bigint> {
+    return this.trx.get(address) ?? 0n
+  }
+
+  async sendTrc20(args: SendArgs): Promise<string> {
+    if (this.nextSendFailure) {
+      const message = this.nextSendFailure
+      this.nextSendFailure = null
+      throw new TronError(message, 'BROADCAST_FAILED')
+    }
+
+    const from = TronWeb.address.fromPrivateKey(args.fromPrivateKeyHex)
+    if (from === false) throw new TronError('invalid private key', 'BROADCAST_FAILED')
+
+    const available = this.trc20.get(from) ?? 0n
+    if (available < args.amountMicros) {
+      throw new TronError(
+        `fake chain: ${from} holds ${available}, cannot send ${args.amountMicros}`,
+        'BROADCAST_FAILED',
+      )
+    }
+
+    this.trc20.set(from, available - args.amountMicros)
+    this.credit(args.to, args.amountMicros)
+
+    const txHash = `send${(this.counter++).toString(16).padStart(60, '0')}`
+    this.broadcasts.push({ from, to: args.to, amountMicros: args.amountMicros, txHash })
+    return txHash
+  }
+}
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+```bash
+pnpm test tests/tron/fake.test.ts
+pnpm typecheck
+```
+
+Expected: PASS, 7 tests.
+
+- [ ] **Step 6: Commit and push**
+
+```bash
+git add src/lib/tron tests/tron
+git commit -m "feat: TronClient interface and deterministic fake chain"
+git push origin main
+```
+
+---
+
+## Task 3: Real TronGrid client
+
+**Files:**
+- Create: `src/lib/tron/trongrid.ts`
+- Test: `tests/tron/trongrid.test.ts`
+
+**Interfaces:**
+- Consumes: `TronClient`, `TronError`, `Trc20Transfer`, `TronConfig`, `hexToTronAddress`
+- Produces: `createTronGridClient(config: TronConfig, fetchImpl?: typeof fetch): TronClient`
+
+The two-stage read from the plan header: `/v1/accounts/{addr}/transactions/trc20` discovers
+candidate transactions cheaply, then `/v1/transactions/{txid}/events` supplies the authoritative
+`event_index` and `block_number`. Tests inject a stubbed `fetch` with recorded response shapes,
+so no network is touched.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/tron/trongrid.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { createTronGridClient } from '@/lib/tron/trongrid'
+import { TronError } from '@/lib/tron/client'
+import type { TronConfig } from '@/lib/tron/config'
+
+const ADDR = 'TMuA6YqfCeX8EhbfYEg5y7S4DqzSJireY9'
+const USDT_CONTRACT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'
+const TX = '8b5e5f9a99d65c0b3aac7f3cbc2ee3029a0d4225054fd99830236d96d853c503'
+
+const config: TronConfig = {
+  network: 'nile',
+  fullHost: 'https://nile.trongrid.io',
+  apiKey: 'test-key',
+  usdtContract: USDT_CONTRACT,
+  confirmations: 19,
+  sweepMinMicros: 20_000_000n,
+  hotWalletAddress: 'TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH',
+  xpub: 'xpub-not-used-here',
+}
+
+/** Response bodies copied from the live probe recorded in this plan's header. */
+function stubFetch(routes: Record<string, unknown>, calls: string[] = []) {
+  return (async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input.toString()
+    calls.push(url)
+    const match = Object.keys(routes).find((k) => url.includes(k))
+    if (!match) return new Response('not found', { status: 404 })
+    return new Response(JSON.stringify(routes[match]), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as typeof fetch
+}
+
+describe('TronGrid client', () => {
+  it('reads the head block height', async () => {
+    const client = createTronGridClient(
+      config,
+      stubFetch({ '/wallet/getnowblock': { block_header: { raw_data: { number: 84768962 } } } }),
+    )
+    expect(await client.headBlock()).toBe(84768962)
+  })
+
+  it('joins the discovery and events endpoints into transfers', async () => {
+    const calls: string[] = []
+    const client = createTronGridClient(
+      config,
+      stubFetch(
+        {
+          '/transactions/trc20': {
+            success: true,
+            data: [
+              {
+                transaction_id: TX,
+                token_info: { address: USDT_CONTRACT, decimals: 6, symbol: 'USDT' },
+                block_timestamp: 1764517689000,
+                from: 'TEPSrSYPDSQ7yXpMFPq91Fb1QEWpMkRGfn',
+                to: ADDR,
+                type: 'Transfer',
+                value: '2000000',
+              },
+            ],
+          },
+          [`/transactions/${TX}/events`]: {
+            success: true,
+            data: [
+              {
+                event_name: 'Transfer',
+                event_index: 0,
+                block_number: 77951958,
+                contract_address: USDT_CONTRACT,
+                result: {
+                  from: '0x30760c7e10b1d3509d8d64a7e9eb9ab94bc83495',
+                  to: '0x82dd6b9966724ae2fdc79b416c7588da67ff1b35',
+                  value: '2000000',
+                },
+              },
+            ],
+          },
+        },
+        calls,
+      ),
+    )
+
+    const transfers = await client.incomingTransfers(ADDR)
+    expect(transfers).toEqual([
+      {
+        txHash: TX,
+        logIndex: 0,
+        from: 'TEPSrSYPDSQ7yXpMFPq91Fb1QEWpMkRGfn',
+        to: ADDR,
+        amountMicros: 2_000_000n,
+        blockNumber: 77951958,
+      },
+    ])
+    expect(calls.some((c) => c.includes('only_to=true'))).toBe(true)
+    expect(calls.some((c) => c.includes(`contract_address=${USDT_CONTRACT}`))).toBe(true)
+  })
+
+  it('ignores events from other contracts and other recipients', async () => {
+    const client = createTronGridClient(
+      config,
+      stubFetch({
+        '/transactions/trc20': {
+          success: true,
+          data: [{ transaction_id: TX, token_info: { address: USDT_CONTRACT }, to: ADDR, value: '1' }],
+        },
+        [`/transactions/${TX}/events`]: {
+          success: true,
+          data: [
+            {
+              event_name: 'Transfer',
+              event_index: 0,
+              block_number: 10,
+              contract_address: 'TSomeOtherContract0000000000000000',
+              result: { from: '0x' + '11'.repeat(20), to: '0x82dd6b9966724ae2fdc79b416c7588da67ff1b35', value: '1' },
+            },
+            {
+              event_name: 'Transfer',
+              event_index: 1,
+              block_number: 10,
+              contract_address: USDT_CONTRACT,
+              result: { from: '0x' + '11'.repeat(20), to: '0x' + '22'.repeat(20), value: '9' },
+            },
+            {
+              event_name: 'Approval',
+              event_index: 2,
+              block_number: 10,
+              contract_address: USDT_CONTRACT,
+              result: { from: '0x' + '11'.repeat(20), to: '0x82dd6b9966724ae2fdc79b416c7588da67ff1b35', value: '5' },
+            },
+          ],
+        },
+      }),
+    )
+
+    expect(await client.incomingTransfers(ADDR)).toEqual([])
+  })
+
+  it('sends the API key header when configured', async () => {
+    let seenKey: string | null = null
+    const client = createTronGridClient(config, (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seenKey = new Headers(init?.headers).get('TRON-PRO-API-KEY')
+      return new Response(JSON.stringify({ block_header: { raw_data: { number: 1 } } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof fetch)
+
+    await client.headBlock()
+    expect(seenKey).toBe('test-key')
+  })
+
+  it('raises TronError on a non-200 response', async () => {
+    const client = createTronGridClient(config, (async () =>
+      new Response('rate limited', { status: 429 })) as typeof fetch)
+
+    await expect(client.headBlock()).rejects.toMatchObject({ code: 'RPC_FAILED' })
+    await expect(client.headBlock()).rejects.toBeInstanceOf(TronError)
+  })
+
+  it('treats an empty discovery result as no transfers', async () => {
+    const client = createTronGridClient(
+      config,
+      stubFetch({ '/transactions/trc20': { success: true, data: [] } }),
+    )
+    expect(await client.incomingTransfers(ADDR)).toEqual([])
+  })
+})
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `pnpm test tests/tron/trongrid.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/tron/trongrid"`.
+
+- [ ] **Step 3: Write the implementation**
+
+`src/lib/tron/trongrid.ts`:
+
+```ts
+import { TronWeb } from 'tronweb'
+import { TronError, type SendArgs, type TronClient, type Trc20Transfer } from './client'
+import type { TronConfig } from './config'
+import { hexToTronAddress } from './address'
+
+type Json = Record<string, any>
+
+export function createTronGridClient(
+  config: TronConfig,
+  fetchImpl: typeof fetch = fetch,
+): TronClient {
+  async function call(path: string, init?: RequestInit): Promise<Json> {
+    const headers = new Headers(init?.headers)
+    headers.set('accept', 'application/json')
+    if (config.apiKey) headers.set('TRON-PRO-API-KEY', config.apiKey)
+    if (init?.body) headers.set('content-type', 'application/json')
+
+    const response = await fetchImpl(`${config.fullHost}${path}`, { ...init, headers })
+    if (!response.ok) {
+      throw new TronError(`TronGrid ${path} returned ${response.status}`, 'RPC_FAILED')
+    }
+    return (await response.json()) as Json
+  }
+
+  async function headBlock(): Promise<number> {
+    const body = await call('/wallet/getnowblock', { method: 'POST', body: '{}' })
+    const height = body?.block_header?.raw_data?.number
+    if (typeof height !== 'number') {
+      throw new TronError('getnowblock returned no block number', 'RPC_FAILED')
+    }
+    return height
+  }
+
+  /**
+   * Two stages, because the cheap per-address endpoint carries no log index:
+   *   1. discover candidate transaction ids for this address
+   *   2. read each transaction's events for the authoritative index and block number
+   */
+  async function incomingTransfers(address: string): Promise<Trc20Transfer[]> {
+    const query = new URLSearchParams({
+      only_to: 'true',
+      limit: '50',
+      contract_address: config.usdtContract,
+    })
+    const discovery = await call(`/v1/accounts/${address}/transactions/trc20?${query}`)
+    const rows: Json[] = discovery?.data ?? []
+
+    const txIds = [...new Set(rows.map((r) => r.transaction_id).filter(Boolean))]
+    const transfers: Trc20Transfer[] = []
+
+    for (const txId of txIds) {
+      const events = await call(`/v1/transactions/${txId}/events`)
+      for (const event of (events?.data ?? []) as Json[]) {
+        if (event.event_name !== 'Transfer') continue
+        if (event.contract_address !== config.usdtContract) continue
+
+        const to = hexToTronAddress(String(event.result?.to ?? ''))
+        if (to !== address) continue
+
+        transfers.push({
+          txHash: txId,
+          logIndex: Number(event.event_index),
+          from: hexToTronAddress(String(event.result?.from ?? '')),
+          to,
+          amountMicros: BigInt(String(event.result?.value ?? '0')),
+          blockNumber: Number(event.block_number),
+        })
+      }
+    }
+
+    return transfers.sort((a, b) => b.blockNumber - a.blockNumber)
+  }
+
+  function tronWebFor(privateKey?: string): TronWeb {
+    return new TronWeb({
+      fullHost: config.fullHost,
+      headers: config.apiKey ? { 'TRON-PRO-API-KEY': config.apiKey } : undefined,
+      privateKey,
+    })
+  }
+
+  async function trc20Balance(address: string): Promise<bigint> {
+    const tronWeb = tronWebFor()
+    tronWeb.setAddress(address)
+    const contract = await tronWeb.contract().at(config.usdtContract)
+    const raw = await contract.balanceOf(address).call()
+    return BigInt(raw.toString())
+  }
+
+  async function trxBalance(address: string): Promise<bigint> {
+    const tronWeb = tronWebFor()
+    return BigInt((await tronWeb.trx.getBalance(address)).toString())
+  }
+
+  async function sendTrc20(args: SendArgs): Promise<string> {
+    const tronWeb = tronWebFor(args.fromPrivateKeyHex)
+    try {
+      const contract = await tronWeb.contract().at(config.usdtContract)
+      const txHash: string = await contract
+        .transfer(args.to, args.amountMicros.toString())
+        .send({ feeLimit: 40_000_000 })
+      return txHash
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const code = /energy|bandwidth/i.test(message) ? 'INSUFFICIENT_ENERGY' : 'BROADCAST_FAILED'
+      throw new TronError(`TRC20 transfer failed: ${message}`, code)
+    }
+  }
+
+  return { headBlock, incomingTransfers, trc20Balance, trxBalance, sendTrc20 }
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+pnpm test tests/tron/trongrid.test.ts
+pnpm typecheck
+```
+
+Expected: PASS, 6 tests.
+
+`TEPSrSYPDSQ7yXpMFPq91Fb1QEWpMkRGfn` is not a guess: it is the value the live TronGrid
+*discovery* endpoint reported as `from` for this transaction, and the test asserts that
+converting the *events* endpoint's hex form reproduces it. If it ever disagrees, the hex
+conversion is wrong — do not relax the expectation to match whatever the code emitted.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add src/lib/tron/trongrid.ts tests/tron/trongrid.test.ts
+git commit -m "feat: TronGrid client joining transfer discovery with event indices"
+git push origin main
+```
+
 <!-- PLAN-CONTINUES -->
