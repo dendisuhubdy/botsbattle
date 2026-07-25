@@ -1,6 +1,7 @@
 import type { Db } from '@/lib/db/client'
 import { TronError, type TronClient } from '@/lib/tron/client'
-import { claimNextJob, completeJob, failJob } from './jobs'
+import { failWithdrawal, markBroadcast } from '@/lib/withdrawals/settle'
+import { claimNextJob, completeJob, failJob, MAX_ATTEMPTS } from './jobs'
 import { derivePrivateKeyHex } from './keys'
 import type { SweepPayload } from './sweep'
 
@@ -14,6 +15,20 @@ export type SignerDeps = {
 export type RunOutcome = 'idle' | 'done' | 'failed'
 
 /**
+ * Derivation index that controls the hot wallet's private key. Fixed rather than derived
+ * from `hotWalletAddress`, matching the deposit-address/sweep fixtures already established
+ * across the test suite (`tests/signer/run.test.ts`, `tests/reconcile/chain.test.ts`), which
+ * consistently use index 99 for the hot wallet's test key.
+ */
+export const HOT_WALLET_INDEX = 99
+
+type WithdrawPayload = {
+  requestId: string
+  address: string
+  amountMicros: string
+}
+
+/**
  * Claim and execute at most one job. Returning after a single job keeps the loop's failure
  * blast radius small and lets the caller decide the pacing.
  */
@@ -21,22 +36,33 @@ export async function runOnce(deps: SignerDeps): Promise<RunOutcome> {
   const job = await claimNextJob(deps.db)
   if (!job) return 'idle'
 
-  if (job.kind !== 'SWEEP') {
+  if (job.kind !== 'SWEEP' && job.kind !== 'WITHDRAW') {
     await failJob(deps.db, job.id, `unknown job kind: ${job.kind}`, { retry: false })
     return 'failed'
   }
 
-  const payload = job.payload as unknown as SweepPayload
-
   try {
-    const privateKeyHex = derivePrivateKeyHex(deps.seed, payload.derivationIndex)
+    if (job.kind === 'SWEEP') {
+      const payload = job.payload as unknown as SweepPayload
+      const txHash = await deps.tron.sendTrc20({
+        fromPrivateKeyHex: derivePrivateKeyHex(deps.seed, payload.derivationIndex),
+        to: deps.hotWalletAddress,
+        amountMicros: BigInt(payload.amountMicros),
+      })
 
+      await completeJob(deps.db, job.id, txHash)
+      return 'done'
+    }
+
+    // WITHDRAW: sent from the hot wallet key to the user's requested address.
+    const payload = job.payload as unknown as WithdrawPayload
     const txHash = await deps.tron.sendTrc20({
-      fromPrivateKeyHex: privateKeyHex,
-      to: deps.hotWalletAddress,
+      fromPrivateKeyHex: derivePrivateKeyHex(deps.seed, HOT_WALLET_INDEX),
+      to: payload.address,
       amountMicros: BigInt(payload.amountMicros),
     })
 
+    await markBroadcast(deps.db, { requestId: payload.requestId, txHash })
     await completeJob(deps.db, job.id, txHash)
     return 'done'
   } catch (err) {
@@ -51,6 +77,14 @@ export async function runOnce(deps: SignerDeps): Promise<RunOutcome> {
     // alert, so park it immediately.
     const retry = err instanceof TronError
     await failJob(deps.db, job.id, message, { retry })
+
+    // When a withdrawal job is out of retries the user's funds must come back; leaving them
+    // ring-fenced against a job nobody will ever run again is money silently frozen.
+    if (job.kind === 'WITHDRAW' && (!retry || job.attempts >= MAX_ATTEMPTS)) {
+      const payload = job.payload as unknown as WithdrawPayload
+      await failWithdrawal(deps.db, { requestId: payload.requestId, reason: message })
+    }
+
     return 'failed'
   }
 }
