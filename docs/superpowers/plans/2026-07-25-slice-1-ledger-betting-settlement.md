@@ -433,8 +433,10 @@ export type Db = NodePgDatabase<typeof schema>
 export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0]
 export type Executor = Db | Tx
 
+// Headroom matters: the concurrency test in Task 7 holds one connection per in-flight
+// transaction while they queue on the same fight row lock.
 export function createDb(connectionString: string): { db: Db; pool: Pool } {
-  const pool = new Pool({ connectionString, max: 20 })
+  const pool = new Pool({ connectionString, max: 30 })
   return { db: drizzle(pool, { schema }), pool }
 }
 
@@ -1139,6 +1141,7 @@ In `tests/helpers/db.ts`, replace the `TRUNCATE` statement with:
 
 ```ts
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { sql } from 'drizzle-orm'
 import { testDb, truncateAll } from '../helpers/db'
 import type { Db } from '@/lib/db/client'
 import { hashPassword, verifyPassword } from '@/lib/auth/password'
@@ -1225,10 +1228,7 @@ describe('signup and login', () => {
     const { sessionId } = await login(db, 'exp@example.com', 'a-good-password')
 
     await db.execute(
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-      (await import('drizzle-orm')).sql`
-        UPDATE sessions SET expires_at = now() - interval '1 second' WHERE id = ${sessionId}
-      `,
+      sql`UPDATE sessions SET expires_at = now() - interval '1 second' WHERE id = ${sessionId}`,
     )
 
     expect(await resolveSession(db, sessionId)).toBeNull()
@@ -1557,11 +1557,10 @@ In `tests/helpers/db.ts`, replace the `TRUNCATE` statement with:
 `tests/helpers/fixtures.ts`:
 
 ```ts
+import { eq } from 'drizzle-orm'
 import type { Executor } from '@/lib/db/client'
 import { users } from '@/lib/db/schema'
-import { hashPassword } from '@/lib/auth/password'
 import { signup } from '@/lib/auth/session'
-import { eq } from 'drizzle-orm'
 
 let counter = 0
 
@@ -1577,15 +1576,13 @@ export async function makeUser(x: Executor, opts: { admin?: boolean } = {}): Pro
 export async function makeAdmin(x: Executor): Promise<string> {
   return makeUser(x, { admin: true })
 }
-
-/** Silences an unused-import warning; hashPassword is re-exported for convenience. */
-export { hashPassword }
 ```
 
 `tests/fights/repo.test.ts`:
 
 ```ts
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { sql } from 'drizzle-orm'
 import { testDb, truncateAll } from '../helpers/db'
 import { makeAdmin } from '../helpers/fixtures'
 import type { Db } from '@/lib/db/client'
@@ -1680,9 +1677,7 @@ describe('fights repo', () => {
     await publishFight(db, due.id)
     await publishFight(db, notDue.id)
     await db.execute(
-      (await import('drizzle-orm')).sql`
-        UPDATE fights SET lock_at = now() - interval '1 minute' WHERE id = ${due.id}
-      `,
+      sql`UPDATE fights SET lock_at = now() - interval '1 minute' WHERE id = ${due.id}`,
     )
 
     expect(await lockDueFights(db)).toBe(1)
@@ -3060,6 +3055,7 @@ export async function settleFight(
         .select({ id: bets.id, payout: bets.payout })
         .from(bets)
         .where(eq(bets.fightId, args.fightId))
+        .orderBy(bets.createdAt, bets.id)
       return {
         replayed: true,
         refunded: prior[0].refunded,
@@ -3085,10 +3081,12 @@ export async function settleFight(
       )
     }
 
+    // Ordered so a replay returns payouts in the same order as the original call.
     const placed = await tx
       .select({ id: bets.id, userId: bets.userId, side: bets.side, stake: bets.stake })
       .from(bets)
       .where(eq(bets.fightId, args.fightId))
+      .orderBy(bets.createdAt, bets.id)
 
     const result = computeSettlement({
       outcome: args.outcome,
@@ -3166,13 +3164,9 @@ export async function settleFight(
     return { ...result, replayed: false }
   })
 }
-
-/** Convenience for the admin API: settle every bet-bearing fight id in one call is deliberately
- *  NOT provided. Settlement is a per-fight human decision. */
-export const __noBulkSettle = true
 ```
 
-Delete the `__noBulkSettle` export before committing — it exists only to make the reasoning explicit while reading the plan. Do not add a bulk-settle helper.
+Do not add a bulk-settle helper. Settlement is a per-fight human decision, and a loop over fights is how one mis-click becomes many.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
