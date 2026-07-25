@@ -980,4 +980,795 @@ git commit -m "feat: withdrawal requests with immediate ledger ring-fencing"
 git push origin main
 ```
 
+---
+
+## Task 3: Admin review — approve and reject
+
+**Files:**
+- Create: `src/lib/withdrawals/review.ts`
+- Test: `tests/withdrawals/review.test.ts`
+
+**Interfaces:**
+- Consumes: `enqueueJob` (Slice 2), `postTransaction`, `WithdrawalError`
+- Produces (`src/lib/withdrawals/review.ts`):
+  - `type PendingReview = { id: string; userId: string; email: string; address: string; amount: bigint; requestedAt: Date }`
+  - `listPendingWithdrawals(x: Executor): Promise<PendingReview[]>`
+  - `approveWithdrawal(db: Db, args: { requestId: string; adminId: string; note?: string }): Promise<{ jobId: string }>`
+  - `rejectWithdrawal(db: Db, args: { requestId: string; adminId: string; note: string }): Promise<void>`
+
+Approval moves no money — the funds are already ring-fenced. It enqueues a `WITHDRAW` signer
+job keyed on the request id, so a double-clicked approve produces one job.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/withdrawals/review.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { eq } from 'drizzle-orm'
+import * as OTPAuth from 'otpauth'
+import { testDb, truncateAll } from '../helpers/db'
+import { makeUser, makeAdmin } from '../helpers/fixtures'
+import type { Db } from '@/lib/db/client'
+import { signerJobs, withdrawalRequests } from '@/lib/db/schema'
+import { creditUser } from '@/lib/admin/credit'
+import { beginEnrolment, confirmEnrolment } from '@/lib/auth/totp'
+import { requestWithdrawal } from '@/lib/withdrawals/request'
+import {
+  listPendingWithdrawals,
+  approveWithdrawal,
+  rejectWithdrawal,
+} from '@/lib/withdrawals/review'
+import { balanceOf, userAvailableAccount, userPendingWithdrawalAccount } from '@/lib/ledger/accounts'
+
+const USDT = 1_000_000n
+const DEST = 'TEnzFm6jmsVnizS7RSuBr7H6zzn4e7H7Pb'
+
+describe('withdrawal review', () => {
+  let db: Db
+  let user: string
+  let admin: string
+  let secret: string
+  let requestId: string
+
+  beforeAll(async () => {
+    ;({ db } = await testDb())
+    process.env.TOTP_ENCRYPTION_KEY = '0'.repeat(64)
+  })
+
+  beforeEach(async () => {
+    await truncateAll(db)
+    admin = await makeAdmin(db)
+    user = await makeUser(db)
+    await creditUser(db, { userId: user, amount: 100n * USDT, reference: 'seed', creditedBy: admin })
+    secret = (await beginEnrolment(db, user)).secret
+    await confirmEnrolment(db, user, code())
+    requestId = (
+      await requestWithdrawal(db, {
+        userId: user,
+        address: DEST,
+        amountMicros: 40n * USDT,
+        totpCode: code(),
+      })
+    ).requestId
+  })
+
+  function code(): string {
+    return new OTPAuth.TOTP({ secret: OTPAuth.Secret.fromBase32(secret) }).generate()
+  }
+
+  it('lists a requested withdrawal for review with the user email', async () => {
+    const pending = await listPendingWithdrawals(db)
+    expect(pending).toHaveLength(1)
+    expect(pending[0]).toMatchObject({ id: requestId, address: DEST, amount: 40n * USDT })
+    expect(pending[0].email).toContain('@example.com')
+  })
+
+  it('approving enqueues a signer job and moves no money', async () => {
+    const { jobId } = await approveWithdrawal(db, { requestId, adminId: admin })
+
+    const [job] = await db.select().from(signerJobs).where(eq(signerJobs.id, jobId))
+    expect(job.kind).toBe('WITHDRAW')
+    expect(job.status).toBe('PENDING')
+
+    // Funds stay ring-fenced; nothing returns to available.
+    expect(await balanceOf(db, await userAvailableAccount(db, user))).toBe(60n * USDT)
+    expect(await balanceOf(db, await userPendingWithdrawalAccount(db, user))).toBe(40n * USDT)
+
+    const [row] = await db
+      .select()
+      .from(withdrawalRequests)
+      .where(eq(withdrawalRequests.id, requestId))
+    expect(row.status).toBe('APPROVED')
+    expect(row.reviewedBy).toBe(admin)
+    expect(row.reviewedAt).not.toBeNull()
+    expect(row.signerJobId).toBe(jobId)
+  })
+
+  it('double-clicking approve produces exactly one job', async () => {
+    const first = await approveWithdrawal(db, { requestId, adminId: admin })
+    const second = await approveWithdrawal(db, { requestId, adminId: admin })
+
+    expect(second.jobId).toBe(first.jobId)
+    expect(await db.select().from(signerJobs)).toHaveLength(1)
+  })
+
+  it('two concurrent approvals produce exactly one job', async () => {
+    const results = await Promise.allSettled([
+      approveWithdrawal(db, { requestId, adminId: admin }),
+      approveWithdrawal(db, { requestId, adminId: admin }),
+    ])
+    expect(results.some((r) => r.status === 'fulfilled')).toBe(true)
+    expect(await db.select().from(signerJobs)).toHaveLength(1)
+  })
+
+  it('rejecting returns the funds', async () => {
+    await rejectWithdrawal(db, { requestId, adminId: admin, note: 'suspicious pattern' })
+
+    expect(await balanceOf(db, await userAvailableAccount(db, user))).toBe(100n * USDT)
+    expect(await balanceOf(db, await userPendingWithdrawalAccount(db, user))).toBe(0n)
+
+    const [row] = await db
+      .select()
+      .from(withdrawalRequests)
+      .where(eq(withdrawalRequests.id, requestId))
+    expect(row.status).toBe('REJECTED')
+    expect(row.reviewNote).toBe('suspicious pattern')
+  })
+
+  it('rejecting twice returns the funds once', async () => {
+    await rejectWithdrawal(db, { requestId, adminId: admin, note: 'no' })
+    await rejectWithdrawal(db, { requestId, adminId: admin, note: 'no' })
+    expect(await balanceOf(db, await userAvailableAccount(db, user))).toBe(100n * USDT)
+  })
+
+  it('cannot reject an already approved withdrawal', async () => {
+    await approveWithdrawal(db, { requestId, adminId: admin })
+    await expect(
+      rejectWithdrawal(db, { requestId, adminId: admin, note: 'changed my mind' }),
+    ).rejects.toMatchObject({ code: 'NOT_REVIEWABLE' })
+  })
+
+  it('cannot approve an already rejected withdrawal', async () => {
+    await rejectWithdrawal(db, { requestId, adminId: admin, note: 'no' })
+    await expect(approveWithdrawal(db, { requestId, adminId: admin })).rejects.toMatchObject({
+      code: 'NOT_REVIEWABLE',
+    })
+  })
+
+  it('drops a reviewed withdrawal off the pending list', async () => {
+    await approveWithdrawal(db, { requestId, adminId: admin })
+    expect(await listPendingWithdrawals(db)).toEqual([])
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `pnpm test tests/withdrawals/review.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/withdrawals/review"`.
+
+- [ ] **Step 3: Write the implementation**
+
+`src/lib/withdrawals/review.ts`. Add `'NOT_REVIEWABLE'` to `WithdrawalError`'s code union in
+`request.ts` as part of this step.
+
+```ts
+import { asc, eq, sql } from 'drizzle-orm'
+import type { Db, Executor } from '@/lib/db/client'
+import { users, withdrawalRequests } from '@/lib/db/schema'
+import { userAvailableAccount, userPendingWithdrawalAccount } from '@/lib/ledger/accounts'
+import { postTransaction } from '@/lib/ledger/post'
+import { enqueueJob } from '@/lib/signer/jobs'
+import { WithdrawalError } from './request'
+
+export type PendingReview = {
+  id: string
+  userId: string
+  email: string
+  address: string
+  amount: bigint
+  requestedAt: Date
+}
+
+export async function listPendingWithdrawals(x: Executor): Promise<PendingReview[]> {
+  const rows = await x
+    .select({
+      id: withdrawalRequests.id,
+      userId: withdrawalRequests.userId,
+      email: users.email,
+      address: withdrawalRequests.address,
+      amount: withdrawalRequests.amount,
+      requestedAt: withdrawalRequests.requestedAt,
+    })
+    .from(withdrawalRequests)
+    .innerJoin(users, eq(users.id, withdrawalRequests.userId))
+    .where(eq(withdrawalRequests.status, 'REQUESTED'))
+    .orderBy(asc(withdrawalRequests.requestedAt))
+  return rows as PendingReview[]
+}
+
+/**
+ * Approve a withdrawal and hand it to the signer.
+ *
+ * No ledger movement happens here — the funds were ring-fenced at request time. The signer
+ * job is keyed on the request id, so a double-clicked approve button enqueues one job.
+ */
+export async function approveWithdrawal(
+  db: Db,
+  args: { requestId: string; adminId: string; note?: string },
+): Promise<{ jobId: string }> {
+  return db.transaction(async (tx) => {
+    const [request] = await tx
+      .select({
+        id: withdrawalRequests.id,
+        userId: withdrawalRequests.userId,
+        address: withdrawalRequests.address,
+        amount: withdrawalRequests.amount,
+        status: withdrawalRequests.status,
+        signerJobId: withdrawalRequests.signerJobId,
+      })
+      .from(withdrawalRequests)
+      .where(eq(withdrawalRequests.id, args.requestId))
+      .for('update')
+      .limit(1)
+
+    if (!request) throw new WithdrawalError(`no withdrawal ${args.requestId}`, 'NOT_FOUND')
+
+    // Replaying an approval returns the original job rather than making a second one.
+    if (request.status === 'APPROVED' && request.signerJobId) {
+      return { jobId: request.signerJobId }
+    }
+    if (request.status !== 'REQUESTED') {
+      throw new WithdrawalError(`withdrawal is ${request.status}`, 'NOT_REVIEWABLE')
+    }
+
+    const { jobId } = await enqueueJob(tx as unknown as Db, {
+      kind: 'WITHDRAW',
+      idempotencyKey: `withdraw:${request.id}`,
+      payload: {
+        requestId: request.id,
+        userId: request.userId,
+        address: request.address,
+        amountMicros: request.amount.toString(),
+      },
+    })
+
+    await tx
+      .update(withdrawalRequests)
+      .set({
+        status: 'APPROVED',
+        reviewedBy: args.adminId,
+        reviewedAt: sql`now()`,
+        reviewNote: args.note ?? null,
+        signerJobId: jobId,
+      })
+      .where(eq(withdrawalRequests.id, request.id))
+
+    return { jobId }
+  })
+}
+
+export async function rejectWithdrawal(
+  db: Db,
+  args: { requestId: string; adminId: string; note: string },
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [request] = await tx
+      .select({
+        id: withdrawalRequests.id,
+        userId: withdrawalRequests.userId,
+        amount: withdrawalRequests.amount,
+        status: withdrawalRequests.status,
+      })
+      .from(withdrawalRequests)
+      .where(eq(withdrawalRequests.id, args.requestId))
+      .for('update')
+      .limit(1)
+
+    if (!request) throw new WithdrawalError(`no withdrawal ${args.requestId}`, 'NOT_FOUND')
+    if (request.status === 'REJECTED') return // funds already returned
+    if (request.status !== 'REQUESTED') {
+      throw new WithdrawalError(`withdrawal is ${request.status}`, 'NOT_REVIEWABLE')
+    }
+
+    const [availableAccount, pendingAccount] = await Promise.all([
+      userAvailableAccount(tx, request.userId),
+      userPendingWithdrawalAccount(tx, request.userId),
+    ])
+
+    await postTransaction(tx, {
+      kind: 'WITHDRAWAL_REJECTED',
+      idempotencyKey: `withdrawal:reject:${request.id}`,
+      metadata: { requestId: request.id, adminId: args.adminId },
+      legs: [
+        { accountId: pendingAccount, amount: -request.amount },
+        { accountId: availableAccount, amount: request.amount },
+      ],
+    })
+
+    await tx
+      .update(withdrawalRequests)
+      .set({
+        status: 'REJECTED',
+        reviewedBy: args.adminId,
+        reviewedAt: sql`now()`,
+        reviewNote: args.note,
+      })
+      .where(eq(withdrawalRequests.id, request.id))
+  })
+}
+```
+
+**Note on `enqueueJob(tx as unknown as Db, …)`:** Slice 2's `enqueueJob` takes a `Db`, but this
+must enlist in the surrounding transaction or an approval could commit without its job. If
+Slice 2 shipped `enqueueJob` accepting an `Executor`, drop the cast. If it did not, widen its
+signature to `Executor` as part of this step rather than leaving the cast in place — a cast
+that silently breaks atomicity on a money path is not acceptable.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+pnpm test tests/withdrawals/review.test.ts
+pnpm typecheck
+```
+
+Expected: PASS, 9 tests.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add src/lib/withdrawals tests/withdrawals
+git commit -m "feat: admin approve and reject for withdrawals"
+git push origin main
+```
+
+---
+
+## Task 4: Signer withdrawal execution and confirmation tracking
+
+**Files:**
+- Modify: `src/lib/signer/run.ts` (handle the `WITHDRAW` kind)
+- Create: `src/lib/withdrawals/settle.ts`, `src/lib/withdrawals/poller.ts`
+- Modify: `worker/main.ts`
+- Test: `tests/withdrawals/settle.test.ts`
+
+**Interfaces:**
+- Consumes: `TronClient`, `runOnce`, `postTransaction`, `houseAccount`
+- Produces (`src/lib/withdrawals/settle.ts`):
+  - `markBroadcast(db: Db, args: { requestId: string; txHash: string }): Promise<void>`
+  - `confirmWithdrawal(db: Db, requestId: string): Promise<void>` — `user_pending_withdrawal → hot_wallet`
+  - `failWithdrawal(db: Db, args: { requestId: string; reason: string }): Promise<void>` — returns funds
+- Produces (`src/lib/withdrawals/poller.ts`):
+  - `pollWithdrawals(db: Db, tron: TronClient, opts: { confirmations: number }): Promise<{ confirmed: string[] }>`
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/withdrawals/settle.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { eq } from 'drizzle-orm'
+import * as OTPAuth from 'otpauth'
+import { mnemonicToSeedSync } from '@scure/bip39'
+import { testDb, truncateAll } from '../helpers/db'
+import { makeUser, makeAdmin } from '../helpers/fixtures'
+import type { Db } from '@/lib/db/client'
+import { withdrawalRequests } from '@/lib/db/schema'
+import { creditUser } from '@/lib/admin/credit'
+import { beginEnrolment, confirmEnrolment } from '@/lib/auth/totp'
+import { requestWithdrawal } from '@/lib/withdrawals/request'
+import { approveWithdrawal } from '@/lib/withdrawals/review'
+import { markBroadcast, confirmWithdrawal, failWithdrawal } from '@/lib/withdrawals/settle'
+import { runOnce } from '@/lib/signer/run'
+import { FakeTron } from '@/lib/tron/fake'
+import { balanceOf, userAvailableAccount, userPendingWithdrawalAccount, houseAccount } from '@/lib/ledger/accounts'
+
+const MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+const SEED = mnemonicToSeedSync(MNEMONIC)
+const USDT = 1_000_000n
+const DEST = 'TEnzFm6jmsVnizS7RSuBr7H6zzn4e7H7Pb'
+const HOT = 'TTTFe9haCY6CACG9iTM8uyL89pFEPy4ctW'
+
+describe('withdrawal settlement', () => {
+  let db: Db
+  let user: string
+  let admin: string
+  let secret: string
+  let requestId: string
+
+  beforeAll(async () => {
+    ;({ db } = await testDb())
+    process.env.TOTP_ENCRYPTION_KEY = '0'.repeat(64)
+  })
+
+  beforeEach(async () => {
+    await truncateAll(db)
+    admin = await makeAdmin(db)
+    user = await makeUser(db)
+    await creditUser(db, { userId: user, amount: 100n * USDT, reference: 'seed', creditedBy: admin })
+    secret = (await beginEnrolment(db, user)).secret
+    await confirmEnrolment(db, user, code())
+    requestId = (
+      await requestWithdrawal(db, {
+        userId: user,
+        address: DEST,
+        amountMicros: 40n * USDT,
+        totpCode: code(),
+      })
+    ).requestId
+  })
+
+  function code(): string {
+    return new OTPAuth.TOTP({ secret: OTPAuth.Secret.fromBase32(secret) }).generate()
+  }
+
+  const pending = async () => balanceOf(db, await userPendingWithdrawalAccount(db, user))
+  const available = async () => balanceOf(db, await userAvailableAccount(db, user))
+  const hot = async () => balanceOf(db, await houseAccount(db, 'hot_wallet'))
+
+  it('records a broadcast without moving money', async () => {
+    await approveWithdrawal(db, { requestId, adminId: admin })
+    await markBroadcast(db, { requestId, txHash: 'deadbeef' })
+
+    const [row] = await db.select().from(withdrawalRequests).where(eq(withdrawalRequests.id, requestId))
+    expect(row.status).toBe('BROADCAST')
+    expect(row.txHash).toBe('deadbeef')
+    expect(await pending()).toBe(40n * USDT)
+  })
+
+  it('closes out pending into hot_wallet on confirmation', async () => {
+    const hotBefore = await hot()
+    await approveWithdrawal(db, { requestId, adminId: admin })
+    await markBroadcast(db, { requestId, txHash: 'deadbeef' })
+    await confirmWithdrawal(db, requestId)
+
+    expect(await pending()).toBe(0n)
+    expect(await available()).toBe(60n * USDT)
+    // Custody is carried inverted, so money leaving reduces the obligation.
+    expect(await hot()).toBe(hotBefore + 40n * USDT)
+
+    const [row] = await db.select().from(withdrawalRequests).where(eq(withdrawalRequests.id, requestId))
+    expect(row.status).toBe('CONFIRMED')
+    expect(row.confirmedAt).not.toBeNull()
+  })
+
+  it('confirming twice moves money once', async () => {
+    await approveWithdrawal(db, { requestId, adminId: admin })
+    await markBroadcast(db, { requestId, txHash: 'deadbeef' })
+    await confirmWithdrawal(db, requestId)
+    const hotAfterFirst = await hot()
+    await confirmWithdrawal(db, requestId)
+
+    expect(await hot()).toBe(hotAfterFirst)
+    expect(await pending()).toBe(0n)
+  })
+
+  it('returns the funds when the broadcast fails', async () => {
+    await approveWithdrawal(db, { requestId, adminId: admin })
+    await failWithdrawal(db, { requestId, reason: 'insufficient energy' })
+
+    expect(await pending()).toBe(0n)
+    expect(await available()).toBe(100n * USDT)
+
+    const [row] = await db.select().from(withdrawalRequests).where(eq(withdrawalRequests.id, requestId))
+    expect(row.status).toBe('FAILED')
+    expect(row.failureReason).toBe('insufficient energy')
+  })
+
+  it('failing twice returns the funds once', async () => {
+    await approveWithdrawal(db, { requestId, adminId: admin })
+    await failWithdrawal(db, { requestId, reason: 'x' })
+    await failWithdrawal(db, { requestId, reason: 'x' })
+    expect(await available()).toBe(100n * USDT)
+  })
+
+  it('the signer broadcasts an approved withdrawal end to end', async () => {
+    await approveWithdrawal(db, { requestId, adminId: admin })
+
+    const tron = new FakeTron()
+    // Fund the hot wallet on the fake chain so the send can succeed.
+    tron.deposit({ to: HOT, amountMicros: 500n * USDT, blockNumber: 1 })
+
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('done')
+
+    expect(tron.broadcasts).toHaveLength(1)
+    expect(tron.broadcasts[0]).toMatchObject({ to: DEST, amountMicros: 40n * USDT })
+
+    const [row] = await db.select().from(withdrawalRequests).where(eq(withdrawalRequests.id, requestId))
+    expect(row.status).toBe('BROADCAST')
+    expect(row.txHash).toBe(tron.broadcasts[0].txHash)
+  })
+
+  it('a failed signer broadcast returns the funds to the user', async () => {
+    await approveWithdrawal(db, { requestId, adminId: admin })
+
+    const tron = new FakeTron()
+    tron.deposit({ to: HOT, amountMicros: 500n * USDT, blockNumber: 1 })
+
+    // Exhaust every retry so the job is parked and the withdrawal fails for good.
+    for (let i = 0; i < 5; i++) {
+      tron.failNextSend('node unreachable')
+      await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })
+    }
+
+    const [row] = await db.select().from(withdrawalRequests).where(eq(withdrawalRequests.id, requestId))
+    expect(row.status).toBe('FAILED')
+    expect(await available()).toBe(100n * USDT)
+    expect(await pending()).toBe(0n)
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `pnpm test tests/withdrawals/settle.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/withdrawals/settle"`.
+
+- [ ] **Step 3: Write the settlement module**
+
+`src/lib/withdrawals/settle.ts`:
+
+```ts
+import { eq, sql } from 'drizzle-orm'
+import type { Db } from '@/lib/db/client'
+import { withdrawalRequests } from '@/lib/db/schema'
+import {
+  houseAccount,
+  userAvailableAccount,
+  userPendingWithdrawalAccount,
+} from '@/lib/ledger/accounts'
+import { postTransaction } from '@/lib/ledger/post'
+import { WithdrawalError } from './request'
+
+export async function markBroadcast(
+  db: Db,
+  args: { requestId: string; txHash: string },
+): Promise<void> {
+  await db
+    .update(withdrawalRequests)
+    .set({ status: 'BROADCAST', txHash: args.txHash, broadcastAt: sql`now()` })
+    .where(eq(withdrawalRequests.id, args.requestId))
+}
+
+/**
+ * The money has genuinely left the platform. Close out the ring-fence against chain custody:
+ * `hot_wallet` is carried with inverted sign, so a positive leg here *reduces* the custody
+ * obligation by the amount that left.
+ */
+export async function confirmWithdrawal(db: Db, requestId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [request] = await tx
+      .select({
+        id: withdrawalRequests.id,
+        userId: withdrawalRequests.userId,
+        amount: withdrawalRequests.amount,
+        status: withdrawalRequests.status,
+      })
+      .from(withdrawalRequests)
+      .where(eq(withdrawalRequests.id, requestId))
+      .for('update')
+      .limit(1)
+
+    if (!request) throw new WithdrawalError(`no withdrawal ${requestId}`, 'NOT_FOUND')
+    if (request.status === 'CONFIRMED') return
+    if (request.status !== 'BROADCAST') {
+      throw new WithdrawalError(`withdrawal is ${request.status}`, 'NOT_REVIEWABLE')
+    }
+
+    const [pendingAccount, hotWallet] = await Promise.all([
+      userPendingWithdrawalAccount(tx, request.userId),
+      houseAccount(tx, 'hot_wallet'),
+    ])
+
+    await postTransaction(tx, {
+      kind: 'WITHDRAWAL_CONFIRMED',
+      idempotencyKey: `withdrawal:confirm:${request.id}`,
+      metadata: { requestId: request.id, userId: request.userId },
+      legs: [
+        { accountId: pendingAccount, amount: -request.amount },
+        { accountId: hotWallet, amount: request.amount },
+      ],
+    })
+
+    await tx
+      .update(withdrawalRequests)
+      .set({ status: 'CONFIRMED', confirmedAt: sql`now()` })
+      .where(eq(withdrawalRequests.id, request.id))
+  })
+}
+
+/** The withdrawal will never land. Return the ring-fenced funds to the user. */
+export async function failWithdrawal(
+  db: Db,
+  args: { requestId: string; reason: string },
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [request] = await tx
+      .select({
+        id: withdrawalRequests.id,
+        userId: withdrawalRequests.userId,
+        amount: withdrawalRequests.amount,
+        status: withdrawalRequests.status,
+      })
+      .from(withdrawalRequests)
+      .where(eq(withdrawalRequests.id, args.requestId))
+      .for('update')
+      .limit(1)
+
+    if (!request) throw new WithdrawalError(`no withdrawal ${args.requestId}`, 'NOT_FOUND')
+    if (request.status === 'FAILED') return
+    if (request.status === 'CONFIRMED') {
+      throw new WithdrawalError('cannot fail a confirmed withdrawal', 'NOT_REVIEWABLE')
+    }
+
+    const [availableAccount, pendingAccount] = await Promise.all([
+      userAvailableAccount(tx, request.userId),
+      userPendingWithdrawalAccount(tx, request.userId),
+    ])
+
+    await postTransaction(tx, {
+      kind: 'WITHDRAWAL_FAILED',
+      idempotencyKey: `withdrawal:fail:${request.id}`,
+      metadata: { requestId: request.id, reason: args.reason },
+      legs: [
+        { accountId: pendingAccount, amount: -request.amount },
+        { accountId: availableAccount, amount: request.amount },
+      ],
+    })
+
+    await tx
+      .update(withdrawalRequests)
+      .set({ status: 'FAILED', failureReason: args.reason })
+      .where(eq(withdrawalRequests.id, request.id))
+  })
+}
+```
+
+- [ ] **Step 4: Teach the signer to handle WITHDRAW jobs**
+
+In `src/lib/signer/run.ts`, replace the single-kind guard with a switch. The withdrawal is sent
+from the hot wallet key — derivation index 0 by convention, matching
+`TRON_HOT_WALLET_ADDRESS`.
+
+```ts
+import { markBroadcast, failWithdrawal } from '@/lib/withdrawals/settle'
+import { MAX_ATTEMPTS } from './jobs'
+
+export const HOT_WALLET_INDEX = 0
+
+// inside runOnce, replacing the `if (job.kind !== 'SWEEP')` guard:
+  if (job.kind !== 'SWEEP' && job.kind !== 'WITHDRAW') {
+    await failJob(deps.db, job.id, `unknown job kind: ${job.kind}`, { retry: false })
+    return 'failed'
+  }
+
+  try {
+    if (job.kind === 'SWEEP') {
+      const payload = job.payload as unknown as SweepPayload
+      const txHash = await deps.tron.sendTrc20({
+        fromPrivateKeyHex: derivePrivateKeyHex(deps.seed, payload.derivationIndex),
+        to: deps.hotWalletAddress,
+        amountMicros: BigInt(payload.amountMicros),
+      })
+      await completeJob(deps.db, job.id, txHash)
+      return 'done'
+    }
+
+    const payload = job.payload as unknown as {
+      requestId: string
+      address: string
+      amountMicros: string
+    }
+    const txHash = await deps.tron.sendTrc20({
+      fromPrivateKeyHex: derivePrivateKeyHex(deps.seed, HOT_WALLET_INDEX),
+      to: payload.address,
+      amountMicros: BigInt(payload.amountMicros),
+    })
+    await markBroadcast(deps.db, { requestId: payload.requestId, txHash })
+    await completeJob(deps.db, job.id, txHash)
+    return 'done'
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const retry = err instanceof TronError
+    await failJob(deps.db, job.id, message, { retry })
+
+    // When a withdrawal job is out of retries the user's funds must come back; leaving them
+    // ring-fenced against a job nobody will ever run again is money silently frozen.
+    if (job.kind === 'WITHDRAW' && (!retry || job.attempts >= MAX_ATTEMPTS)) {
+      const payload = job.payload as unknown as { requestId: string }
+      await failWithdrawal(deps.db, { requestId: payload.requestId, reason: message })
+    }
+    return 'failed'
+  }
+```
+
+- [ ] **Step 5: Write the confirmation poller**
+
+`src/lib/withdrawals/poller.ts`:
+
+```ts
+import { eq } from 'drizzle-orm'
+import type { Db } from '@/lib/db/client'
+import { withdrawalRequests } from '@/lib/db/schema'
+import type { TronClient } from '@/lib/tron/client'
+import { confirmWithdrawal } from './settle'
+
+/**
+ * Confirm broadcast withdrawals once the destination shows the transfer buried deep enough.
+ *
+ * The check is deliberately "did a transfer of this amount to this address land in a block
+ * at least N deep", rather than trusting the broadcast receipt: a receipt says the node
+ * accepted the transaction, not that it survived.
+ */
+export async function pollWithdrawals(
+  db: Db,
+  tron: TronClient,
+  opts: { confirmations: number },
+): Promise<{ confirmed: string[] }> {
+  const head = await tron.headBlock()
+  const confirmed: string[] = []
+
+  const broadcast = await db
+    .select({
+      id: withdrawalRequests.id,
+      address: withdrawalRequests.address,
+      amount: withdrawalRequests.amount,
+      txHash: withdrawalRequests.txHash,
+    })
+    .from(withdrawalRequests)
+    .where(eq(withdrawalRequests.status, 'BROADCAST'))
+
+  for (const request of broadcast) {
+    try {
+      const transfers = await tron.incomingTransfers(request.address)
+      const landed = transfers.find(
+        (t) =>
+          t.txHash === request.txHash &&
+          t.amountMicros === request.amount &&
+          head - t.blockNumber + 1 >= opts.confirmations,
+      )
+      if (!landed) continue
+
+      await confirmWithdrawal(db, request.id)
+      confirmed.push(request.id)
+    } catch (err) {
+      console.error(`[withdrawals] failed to check ${request.id}:`, err)
+    }
+  }
+
+  return { confirmed }
+}
+```
+
+- [ ] **Step 6: Wire it into the worker**
+
+In `worker/main.ts`, inside `onTick`, after the sweep enqueue:
+
+```ts
+    const withdrawals = await pollWithdrawals(db, tron, { confirmations: config.confirmations })
+    if (withdrawals.confirmed.length) {
+      console.log(`[worker] confirmed ${withdrawals.confirmed.length} withdrawal(s)`)
+    }
+```
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+```bash
+pnpm test tests/withdrawals
+pnpm typecheck
+pnpm build
+```
+
+Expected: PASS across all three withdrawal suites.
+
+- [ ] **Step 8: Commit and push**
+
+```bash
+git add src/lib/withdrawals src/lib/signer/run.ts worker/main.ts tests/withdrawals
+git commit -m "feat: signer withdrawal broadcast and worker confirmation tracking"
+git push origin main
+```
+
 <!-- PLAN-CONTINUES -->
