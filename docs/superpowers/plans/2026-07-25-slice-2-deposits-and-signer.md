@@ -1688,4 +1688,657 @@ git commit -m "feat: idempotent deposit crediting after confirmation threshold"
 git push origin main
 ```
 
+---
+
+## Task 6: Deposit poller
+
+**Files:**
+- Create: `src/lib/deposits/poller.ts`
+- Test: `tests/deposits/poller.test.ts`
+
+**Interfaces:**
+- Consumes: `TronClient`, `listDepositAddresses`, `recordSeenTransfer`, `creditConfirmedDeposits`
+- Produces (`src/lib/deposits/poller.ts`):
+  - `type PollResult = { headBlock: number; addressesScanned: number; newTransfers: number; credited: string[] }`
+  - `pollDeposits(db: Db, tron: TronClient, opts: { confirmations: number }): Promise<PollResult>`
+
+One cycle, fully driven by the fake in tests: read head, scan each known address, record what
+is new, then credit whatever is now buried deep enough. Errors on one address must not abort
+the cycle — a single unlucky address should not stall every other user's deposits.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/deposits/poller.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { HDKey } from '@scure/bip32'
+import { mnemonicToSeedSync } from '@scure/bip39'
+import { testDb, truncateAll } from '../helpers/db'
+import { makeUser } from '../helpers/fixtures'
+import type { Db } from '@/lib/db/client'
+import { ACCOUNT_PATH } from '@/lib/tron/address'
+import { assignDepositAddress } from '@/lib/deposits/addresses'
+import { pollDeposits } from '@/lib/deposits/poller'
+import { FakeTron } from '@/lib/tron/fake'
+import { userBalance } from '@/lib/ledger/accounts'
+import type { TronClient } from '@/lib/tron/client'
+
+const MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+const XPUB = HDKey.fromMasterSeed(mnemonicToSeedSync(MNEMONIC)).derive(ACCOUNT_PATH)
+  .publicExtendedKey
+const USDT = 1_000_000n
+const CONF = { confirmations: 19 }
+
+describe('pollDeposits', () => {
+  let db: Db
+
+  beforeAll(async () => {
+    ;({ db } = await testDb())
+  })
+
+  beforeEach(async () => {
+    await truncateAll(db)
+  })
+
+  it('does nothing when no addresses are assigned', async () => {
+    const tron = new FakeTron()
+    const result = await pollDeposits(db, tron, CONF)
+    expect(result).toMatchObject({ addressesScanned: 0, newTransfers: 0, credited: [] })
+  })
+
+  it('records a transfer but withholds credit until confirmed', async () => {
+    const user = await makeUser(db)
+    const { address } = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+
+    const tron = new FakeTron()
+    tron.setHead(1000)
+    tron.deposit({ to: address, amountMicros: 40n * USDT, blockNumber: 1000 })
+
+    const first = await pollDeposits(db, tron, CONF)
+    expect(first.newTransfers).toBe(1)
+    expect(first.credited).toEqual([])
+    expect(await userBalance(db, user)).toBe(0n)
+
+    tron.setHead(1018) // 19 blocks deep requires head 1018 for a block-1000 transfer
+    const second = await pollDeposits(db, tron, CONF)
+    expect(second.credited).toHaveLength(1)
+    expect(await userBalance(db, user)).toBe(40n * USDT)
+  })
+
+  it('is safe to run repeatedly — no double credit, no duplicate rows', async () => {
+    const user = await makeUser(db)
+    const { address } = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+
+    const tron = new FakeTron()
+    tron.deposit({ to: address, amountMicros: 12n * USDT, blockNumber: 1000 })
+    tron.setHead(2000)
+
+    await pollDeposits(db, tron, CONF)
+    await pollDeposits(db, tron, CONF)
+    const third = await pollDeposits(db, tron, CONF)
+
+    expect(third.newTransfers).toBe(0)
+    expect(third.credited).toEqual([])
+    expect(await userBalance(db, user)).toBe(12n * USDT)
+  })
+
+  it('scans every assigned address', async () => {
+    const users = [await makeUser(db), await makeUser(db)]
+    const addresses = []
+    for (const u of users) {
+      addresses.push((await assignDepositAddress(db, { userId: u, xpub: XPUB })).address)
+    }
+
+    const tron = new FakeTron()
+    tron.deposit({ to: addresses[0], amountMicros: 5n * USDT, blockNumber: 1000 })
+    tron.deposit({ to: addresses[1], amountMicros: 6n * USDT, blockNumber: 1000 })
+    tron.setHead(2000)
+
+    const result = await pollDeposits(db, tron, CONF)
+    expect(result.addressesScanned).toBe(2)
+    expect(result.credited).toHaveLength(2)
+    expect(await userBalance(db, users[0])).toBe(5n * USDT)
+    expect(await userBalance(db, users[1])).toBe(6n * USDT)
+  })
+
+  it('keeps going when one address fails to read', async () => {
+    const users = [await makeUser(db), await makeUser(db)]
+    const addresses = []
+    for (const u of users) {
+      addresses.push((await assignDepositAddress(db, { userId: u, xpub: XPUB })).address)
+    }
+
+    const inner = new FakeTron()
+    inner.deposit({ to: addresses[1], amountMicros: 9n * USDT, blockNumber: 1000 })
+    inner.setHead(2000)
+
+    // A client that throws for exactly one address.
+    const flaky: TronClient = {
+      headBlock: () => inner.headBlock(),
+      incomingTransfers: (address) => {
+        if (address === addresses[0]) return Promise.reject(new Error('rpc exploded'))
+        return inner.incomingTransfers(address)
+      },
+      trc20Balance: (a) => inner.trc20Balance(a),
+      trxBalance: (a) => inner.trxBalance(a),
+      sendTrc20: (a) => inner.sendTrc20(a),
+    }
+
+    const result = await pollDeposits(db, flaky, CONF)
+    expect(result.addressesScanned).toBe(2)
+    expect(await userBalance(db, users[1])).toBe(9n * USDT)
+  })
+})
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `pnpm test tests/deposits/poller.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/deposits/poller"`.
+
+- [ ] **Step 3: Write the implementation**
+
+`src/lib/deposits/poller.ts`:
+
+```ts
+import type { Db } from '@/lib/db/client'
+import type { TronClient } from '@/lib/tron/client'
+import { listDepositAddresses } from './addresses'
+import { creditConfirmedDeposits, recordSeenTransfer } from './credit'
+
+export type PollResult = {
+  headBlock: number
+  addressesScanned: number
+  newTransfers: number
+  credited: string[]
+}
+
+/**
+ * One poll cycle. A read failure on a single address is logged and skipped rather than
+ * aborting the cycle: one unlucky address must not stall every other user's deposits.
+ */
+export async function pollDeposits(
+  db: Db,
+  tron: TronClient,
+  opts: { confirmations: number },
+): Promise<PollResult> {
+  const headBlock = await tron.headBlock()
+  const addresses = await listDepositAddresses(db)
+  let newTransfers = 0
+
+  for (const { address } of addresses) {
+    try {
+      for (const transfer of await tron.incomingTransfers(address)) {
+        const recorded = await recordSeenTransfer(db, transfer)
+        if (recorded && !recorded.alreadyKnown) newTransfers++
+      }
+    } catch (err) {
+      console.error(`[poller] failed to read ${address}:`, err)
+    }
+  }
+
+  const credited = await creditConfirmedDeposits(db, headBlock, opts.confirmations)
+  return { headBlock, addressesScanned: addresses.length, newTransfers, credited }
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+pnpm test tests/deposits/poller.test.ts
+pnpm typecheck
+```
+
+Expected: PASS, 5 tests.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add src/lib/deposits/poller.ts tests/deposits/poller.test.ts
+git commit -m "feat: deposit poller cycle resilient to per-address read failures"
+git push origin main
+```
+
+---
+
+## Task 7: Sweep policy and signer job queue
+
+**Files:**
+- Create: `src/lib/signer/jobs.ts`, `src/lib/signer/sweep.ts`
+- Test: `tests/signer/jobs.test.ts`, `tests/signer/sweep.test.ts`
+
+**Interfaces:**
+- Consumes: `Db`, `TronClient`, `listDepositAddresses`, `signerJobs`
+- Produces (`src/lib/signer/jobs.ts`):
+  - `type SignerJob = { id: string; kind: string; payload: Record<string, unknown>; attempts: number }`
+  - `enqueueJob(db: Db, args: { kind: string; idempotencyKey: string; payload: Record<string, unknown> }): Promise<{ jobId: string; created: boolean }>`
+  - `claimNextJob(db: Db): Promise<SignerJob | null>`
+  - `completeJob(db: Db, jobId: string, txHash: string): Promise<void>`
+  - `failJob(db: Db, jobId: string, error: string, opts?: { retry?: boolean }): Promise<void>`
+  - `MAX_ATTEMPTS = 5`
+- Produces (`src/lib/signer/sweep.ts`):
+  - `type SweepPayload = { derivationIndex: number; address: string; amountMicros: string }`
+  - `planSweeps(db: Db, tron: TronClient, opts: { minMicros: bigint }): Promise<SweepPayload[]>`
+  - `enqueueSweeps(db: Db, tron: TronClient, opts: { minMicros: bigint }): Promise<number>`
+
+The sweep idempotency key is `sweep:{address}:{amountMicros}`, so re-planning an unchanged
+balance does not queue a second job, while a genuinely larger balance later does.
+
+- [ ] **Step 1: Write the failing job-queue test**
+
+`tests/signer/jobs.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { eq } from 'drizzle-orm'
+import { testDb, truncateAll } from '../helpers/db'
+import type { Db } from '@/lib/db/client'
+import { signerJobs } from '@/lib/db/schema'
+import { enqueueJob, claimNextJob, completeJob, failJob, MAX_ATTEMPTS } from '@/lib/signer/jobs'
+
+describe('signer job queue', () => {
+  let db: Db
+
+  beforeAll(async () => {
+    ;({ db } = await testDb())
+  })
+
+  beforeEach(async () => {
+    await truncateAll(db)
+  })
+
+  const job = (key: string) => ({ kind: 'SWEEP', idempotencyKey: key, payload: { address: 'T1' } })
+
+  it('enqueues a pending job', async () => {
+    const result = await enqueueJob(db, job('k1'))
+    expect(result.created).toBe(true)
+
+    const [row] = await db.select().from(signerJobs)
+    expect(row.status).toBe('PENDING')
+    expect(row.attempts).toBe(0)
+  })
+
+  it('is idempotent on the key', async () => {
+    const first = await enqueueJob(db, job('dup'))
+    const second = await enqueueJob(db, job('dup'))
+
+    expect(second.created).toBe(false)
+    expect(second.jobId).toBe(first.jobId)
+    expect(await db.select().from(signerJobs)).toHaveLength(1)
+  })
+
+  it('claims a job and marks it CLAIMED', async () => {
+    await enqueueJob(db, job('k1'))
+    const claimed = await claimNextJob(db)
+
+    expect(claimed).not.toBeNull()
+    expect(claimed!.attempts).toBe(1)
+
+    const [row] = await db.select().from(signerJobs)
+    expect(row.status).toBe('CLAIMED')
+    expect(row.claimedAt).not.toBeNull()
+  })
+
+  it('returns null when there is nothing to claim', async () => {
+    expect(await claimNextJob(db)).toBeNull()
+  })
+
+  it('never hands one job to two concurrent claimants', async () => {
+    await enqueueJob(db, job('only-one'))
+    const claims = await Promise.all([claimNextJob(db), claimNextJob(db), claimNextJob(db)])
+    expect(claims.filter(Boolean)).toHaveLength(1)
+  })
+
+  it('completes a job with its transaction hash', async () => {
+    const { jobId } = await enqueueJob(db, job('k1'))
+    await claimNextJob(db)
+    await completeJob(db, jobId, 'abc123')
+
+    const [row] = await db.select().from(signerJobs).where(eq(signerJobs.id, jobId))
+    expect(row.status).toBe('DONE')
+    expect(row.txHash).toBe('abc123')
+    expect(row.completedAt).not.toBeNull()
+  })
+
+  it('returns a retryable failure to PENDING', async () => {
+    const { jobId } = await enqueueJob(db, job('k1'))
+    await claimNextJob(db)
+    await failJob(db, jobId, 'temporary rpc error', { retry: true })
+
+    const [row] = await db.select().from(signerJobs).where(eq(signerJobs.id, jobId))
+    expect(row.status).toBe('PENDING')
+    expect(row.lastError).toBe('temporary rpc error')
+    expect(await claimNextJob(db)).not.toBeNull()
+  })
+
+  it('marks a non-retryable failure FAILED', async () => {
+    const { jobId } = await enqueueJob(db, job('k1'))
+    await claimNextJob(db)
+    await failJob(db, jobId, 'bad address', { retry: false })
+
+    const [row] = await db.select().from(signerJobs).where(eq(signerJobs.id, jobId))
+    expect(row.status).toBe('FAILED')
+    expect(await claimNextJob(db)).toBeNull()
+  })
+
+  it('stops retrying after MAX_ATTEMPTS', async () => {
+    const { jobId } = await enqueueJob(db, job('k1'))
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      const claimed = await claimNextJob(db)
+      expect(claimed).not.toBeNull()
+      await failJob(db, jobId, `attempt ${i}`, { retry: true })
+    }
+
+    const [row] = await db.select().from(signerJobs).where(eq(signerJobs.id, jobId))
+    expect(row.status).toBe('FAILED')
+    expect(await claimNextJob(db)).toBeNull()
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `pnpm test tests/signer/jobs.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/signer/jobs"`.
+
+- [ ] **Step 3: Write the job queue**
+
+`src/lib/signer/jobs.ts`:
+
+```ts
+import { and, asc, eq, sql } from 'drizzle-orm'
+import type { Db } from '@/lib/db/client'
+import { signerJobs } from '@/lib/db/schema'
+
+export const MAX_ATTEMPTS = 5
+
+export type SignerJob = {
+  id: string
+  kind: string
+  payload: Record<string, unknown>
+  attempts: number
+}
+
+export async function enqueueJob(
+  db: Db,
+  args: { kind: string; idempotencyKey: string; payload: Record<string, unknown> },
+): Promise<{ jobId: string; created: boolean }> {
+  const inserted = await db
+    .insert(signerJobs)
+    .values({ kind: args.kind, idempotencyKey: args.idempotencyKey, payload: args.payload })
+    .onConflictDoNothing({ target: signerJobs.idempotencyKey })
+    .returning({ id: signerJobs.id })
+
+  if (inserted.length) return { jobId: inserted[0].id, created: true }
+
+  const existing = await db
+    .select({ id: signerJobs.id })
+    .from(signerJobs)
+    .where(eq(signerJobs.idempotencyKey, args.idempotencyKey))
+    .limit(1)
+  return { jobId: existing[0].id, created: false }
+}
+
+/**
+ * Claim the oldest pending job. `FOR UPDATE SKIP LOCKED` means several signer instances
+ * could run without ever handing one job to two of them.
+ */
+export async function claimNextJob(db: Db): Promise<SignerJob | null> {
+  return db.transaction(async (tx) => {
+    const candidates = await tx
+      .select({ id: signerJobs.id })
+      .from(signerJobs)
+      .where(eq(signerJobs.status, 'PENDING'))
+      .orderBy(asc(signerJobs.createdAt))
+      .limit(1)
+      .for('update', { skipLocked: true })
+
+    if (!candidates.length) return null
+
+    const [claimed] = await tx
+      .update(signerJobs)
+      .set({
+        status: 'CLAIMED',
+        attempts: sql`${signerJobs.attempts} + 1`,
+        claimedAt: sql`now()`,
+      })
+      .where(eq(signerJobs.id, candidates[0].id))
+      .returning({
+        id: signerJobs.id,
+        kind: signerJobs.kind,
+        payload: signerJobs.payload,
+        attempts: signerJobs.attempts,
+      })
+
+    return {
+      id: claimed.id,
+      kind: claimed.kind,
+      payload: claimed.payload as Record<string, unknown>,
+      attempts: claimed.attempts,
+    }
+  })
+}
+
+export async function completeJob(db: Db, jobId: string, txHash: string): Promise<void> {
+  await db
+    .update(signerJobs)
+    .set({ status: 'DONE', txHash, completedAt: sql`now()`, lastError: null })
+    .where(eq(signerJobs.id, jobId))
+}
+
+/**
+ * A retryable failure goes back to PENDING until MAX_ATTEMPTS is exhausted, after which it
+ * is parked as FAILED for a human. Broadcasting blindly forever would burn gas on a
+ * transaction that cannot succeed.
+ */
+export async function failJob(
+  db: Db,
+  jobId: string,
+  error: string,
+  opts: { retry?: boolean } = {},
+): Promise<void> {
+  const rows = await db
+    .select({ attempts: signerJobs.attempts })
+    .from(signerJobs)
+    .where(eq(signerJobs.id, jobId))
+    .limit(1)
+  if (!rows.length) return
+
+  const exhausted = rows[0].attempts >= MAX_ATTEMPTS
+  const status = opts.retry && !exhausted ? 'PENDING' : 'FAILED'
+
+  await db
+    .update(signerJobs)
+    .set({
+      status,
+      lastError: error,
+      completedAt: status === 'FAILED' ? sql`now()` : null,
+    })
+    .where(eq(signerJobs.id, jobId))
+}
+```
+
+- [ ] **Step 4: Write the failing sweep test**
+
+`tests/signer/sweep.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { HDKey } from '@scure/bip32'
+import { mnemonicToSeedSync } from '@scure/bip39'
+import { testDb, truncateAll } from '../helpers/db'
+import { makeUser } from '../helpers/fixtures'
+import type { Db } from '@/lib/db/client'
+import { signerJobs } from '@/lib/db/schema'
+import { ACCOUNT_PATH } from '@/lib/tron/address'
+import { assignDepositAddress } from '@/lib/deposits/addresses'
+import { planSweeps, enqueueSweeps } from '@/lib/signer/sweep'
+import { FakeTron } from '@/lib/tron/fake'
+
+const MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+const XPUB = HDKey.fromMasterSeed(mnemonicToSeedSync(MNEMONIC)).derive(ACCOUNT_PATH)
+  .publicExtendedKey
+const USDT = 1_000_000n
+const OPTS = { minMicros: 20n * USDT }
+
+describe('sweep planning', () => {
+  let db: Db
+
+  beforeAll(async () => {
+    ;({ db } = await testDb())
+  })
+
+  beforeEach(async () => {
+    await truncateAll(db)
+  })
+
+  async function addressFor(): Promise<string> {
+    return (await assignDepositAddress(db, { userId: await makeUser(db), xpub: XPUB })).address
+  }
+
+  it('ignores a balance below the threshold', async () => {
+    const address = await addressFor()
+    const tron = new FakeTron()
+    tron.deposit({ to: address, amountMicros: 19n * USDT, blockNumber: 1 })
+
+    expect(await planSweeps(db, tron, OPTS)).toEqual([])
+  })
+
+  it('plans a sweep at exactly the threshold', async () => {
+    const address = await addressFor()
+    const tron = new FakeTron()
+    tron.deposit({ to: address, amountMicros: 20n * USDT, blockNumber: 1 })
+
+    const plans = await planSweeps(db, tron, OPTS)
+    expect(plans).toEqual([
+      { derivationIndex: 0, address, amountMicros: (20n * USDT).toString() },
+    ])
+  })
+
+  it('plans nothing for an empty address', async () => {
+    await addressFor()
+    expect(await planSweeps(db, new FakeTron(), OPTS)).toEqual([])
+  })
+
+  it('enqueues one job per sweepable address', async () => {
+    const a = await addressFor()
+    const b = await addressFor()
+    const tron = new FakeTron()
+    tron.deposit({ to: a, amountMicros: 25n * USDT, blockNumber: 1 })
+    tron.deposit({ to: b, amountMicros: 1n * USDT, blockNumber: 1 })
+
+    expect(await enqueueSweeps(db, tron, OPTS)).toBe(1)
+    const jobs = await db.select().from(signerJobs)
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0].kind).toBe('SWEEP')
+  })
+
+  it('does not re-enqueue while the balance is unchanged', async () => {
+    const address = await addressFor()
+    const tron = new FakeTron()
+    tron.deposit({ to: address, amountMicros: 25n * USDT, blockNumber: 1 })
+
+    await enqueueSweeps(db, tron, OPTS)
+    expect(await enqueueSweeps(db, tron, OPTS)).toBe(0)
+    expect(await db.select().from(signerJobs)).toHaveLength(1)
+  })
+
+  it('enqueues again once more funds arrive', async () => {
+    const address = await addressFor()
+    const tron = new FakeTron()
+    tron.deposit({ to: address, amountMicros: 25n * USDT, blockNumber: 1 })
+    await enqueueSweeps(db, tron, OPTS)
+
+    tron.deposit({ to: address, amountMicros: 5n * USDT, blockNumber: 2 })
+    expect(await enqueueSweeps(db, tron, OPTS)).toBe(1)
+    expect(await db.select().from(signerJobs)).toHaveLength(2)
+  })
+})
+```
+
+- [ ] **Step 5: Write the sweep module**
+
+`src/lib/signer/sweep.ts`:
+
+```ts
+import type { Db } from '@/lib/db/client'
+import type { TronClient } from '@/lib/tron/client'
+import { listDepositAddresses } from '@/lib/deposits/addresses'
+import { enqueueJob } from './jobs'
+
+export type SweepPayload = {
+  derivationIndex: number
+  address: string
+  /** Serialised because JSONB cannot hold a bigint. */
+  amountMicros: string
+}
+
+/**
+ * Sweeping costs TRX for energy and bandwidth, so it is only economical above a threshold.
+ * Funds below it stay at the deposit address; the user's ledger balance is already credited
+ * and spendable, so this is expected behaviour rather than a stuck deposit.
+ */
+export async function planSweeps(
+  db: Db,
+  tron: TronClient,
+  opts: { minMicros: bigint },
+): Promise<SweepPayload[]> {
+  const addresses = await listDepositAddresses(db)
+  const plans: SweepPayload[] = []
+
+  for (const { address, derivationIndex } of addresses) {
+    try {
+      const balance = await tron.trc20Balance(address)
+      if (balance < opts.minMicros) continue
+      plans.push({ derivationIndex, address, amountMicros: balance.toString() })
+    } catch (err) {
+      console.error(`[sweep] failed to read balance for ${address}:`, err)
+    }
+  }
+
+  return plans
+}
+
+export async function enqueueSweeps(
+  db: Db,
+  tron: TronClient,
+  opts: { minMicros: bigint },
+): Promise<number> {
+  let created = 0
+
+  for (const plan of await planSweeps(db, tron, opts)) {
+    // Keying on the amount means an unchanged balance re-plans to the same job, while a
+    // genuinely larger balance later produces a new one.
+    const result = await enqueueJob(db, {
+      kind: 'SWEEP',
+      idempotencyKey: `sweep:${plan.address}:${plan.amountMicros}`,
+      payload: plan as unknown as Record<string, unknown>,
+    })
+    if (result.created) created++
+  }
+
+  return created
+}
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+```bash
+pnpm test tests/signer
+pnpm typecheck
+```
+
+Expected: PASS, 9 + 6 = 15 tests.
+
+- [ ] **Step 7: Commit and push**
+
+```bash
+git add src/lib/signer tests/signer
+git commit -m "feat: signer job queue and sweep threshold policy"
+git push origin main
+```
+
 <!-- PLAN-CONTINUES -->
