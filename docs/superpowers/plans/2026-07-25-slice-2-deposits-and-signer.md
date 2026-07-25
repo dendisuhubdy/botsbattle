@@ -2341,4 +2341,1266 @@ git commit -m "feat: signer job queue and sweep threshold policy"
 git push origin main
 ```
 
-<!-- PLAN-CONTINUES -->
+---
+
+## Task 8: Signer key derivation and execution loop
+
+The only module in the codebase that touches the master seed. Treat every line as security-
+sensitive.
+
+**Files:**
+- Create: `src/lib/signer/keys.ts`, `src/lib/signer/run.ts`
+- Test: `tests/signer/keys.test.ts`, `tests/signer/run.test.ts`
+
+**Interfaces:**
+- Consumes: `TronClient`, `claimNextJob`, `completeJob`, `failJob`, `SweepPayload`, `deriveAddress`
+- Produces (`src/lib/signer/keys.ts`):
+  - `loadSignerSeed(env?: NodeJS.ProcessEnv): Uint8Array`
+  - `derivePrivateKeyHex(seed: Uint8Array, index: number): string`
+  - `deriveXpub(seed: Uint8Array): string`
+  - `assertMatchesXpub(seed: Uint8Array, xpub: string, index?: number): void`
+- Produces (`src/lib/signer/run.ts`):
+  - `type SignerDeps = { db: Db; tron: TronClient; seed: Uint8Array; hotWalletAddress: string }`
+  - `runOnce(deps: SignerDeps): Promise<'idle' | 'done' | 'failed'>`
+
+- [ ] **Step 1: Write the failing key test**
+
+`tests/signer/keys.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { mnemonicToSeedSync } from '@scure/bip39'
+import { TronWeb } from 'tronweb'
+import { derivePrivateKeyHex, deriveXpub, assertMatchesXpub, loadSignerSeed } from '@/lib/signer/keys'
+import { deriveAddress } from '@/lib/tron/address'
+
+const MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+const SEED = mnemonicToSeedSync(MNEMONIC)
+
+describe('signer keys', () => {
+  it('derives a key whose address matches the xpub-derived address', () => {
+    const xpub = deriveXpub(SEED)
+    for (let i = 0; i < 10; i++) {
+      const priv = derivePrivateKeyHex(SEED, i)
+      expect(TronWeb.address.fromPrivateKey(priv)).toBe(deriveAddress(xpub, i))
+    }
+  })
+
+  it('produces a 64-character hex private key', () => {
+    expect(derivePrivateKeyHex(SEED, 0)).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('derives the expected xpub for the standard test mnemonic', () => {
+    expect(deriveAddress(deriveXpub(SEED), 0)).toBe('TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH')
+  })
+
+  it('rejects a negative or non-integer index', () => {
+    expect(() => derivePrivateKeyHex(SEED, -1)).toThrow(RangeError)
+    expect(() => derivePrivateKeyHex(SEED, 2.5)).toThrow(RangeError)
+  })
+
+  it('assertMatchesXpub passes for the matching xpub', () => {
+    expect(() => assertMatchesXpub(SEED, deriveXpub(SEED))).not.toThrow()
+  })
+
+  it('assertMatchesXpub throws when seed and xpub disagree', () => {
+    // The catastrophic misconfiguration: web hands out addresses from one wallet while the
+    // signer holds a different seed, so swept funds and deposits diverge permanently.
+    const otherSeed = mnemonicToSeedSync(
+      'legal winner thank year wave sausage worth useful legal winner thank yellow',
+    )
+    expect(() => assertMatchesXpub(otherSeed, deriveXpub(SEED))).toThrow(/does not match/i)
+  })
+
+  it('loadSignerSeed refuses to start without a mnemonic', () => {
+    expect(() => loadSignerSeed({} as NodeJS.ProcessEnv)).toThrow(/TRON_MNEMONIC/)
+  })
+
+  it('loadSignerSeed accepts a valid mnemonic', () => {
+    const seed = loadSignerSeed({ TRON_MNEMONIC: MNEMONIC } as NodeJS.ProcessEnv)
+    expect(Buffer.from(seed).toString('hex')).toBe(Buffer.from(SEED).toString('hex'))
+  })
+
+  it('loadSignerSeed rejects an invalid mnemonic', () => {
+    expect(() =>
+      loadSignerSeed({ TRON_MNEMONIC: 'not actually a valid bip39 phrase at all' } as NodeJS.ProcessEnv),
+    ).toThrow(/mnemonic/i)
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `pnpm test tests/signer/keys.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/signer/keys"`.
+
+- [ ] **Step 3: Write the keys module**
+
+`src/lib/signer/keys.ts`:
+
+```ts
+import { HDKey } from '@scure/bip32'
+import { mnemonicToSeedSync, validateMnemonic } from '@scure/bip39'
+import { wordlist } from '@scure/bip39/wordlists/english.js'
+import { ACCOUNT_PATH, deriveAddress } from '@/lib/tron/address'
+
+/**
+ * SIGNER PROCESS ONLY.
+ *
+ * Nothing in this file may be imported by `web` or `worker`. It is the single point at
+ * which spending material enters the system.
+ */
+export function loadSignerSeed(env: NodeJS.ProcessEnv = process.env): Uint8Array {
+  const mnemonic = env.TRON_MNEMONIC?.trim()
+  if (!mnemonic) throw new Error('TRON_MNEMONIC is not set; the signer cannot start')
+  if (!validateMnemonic(mnemonic, wordlist)) {
+    throw new Error('TRON_MNEMONIC is not a valid BIP39 mnemonic')
+  }
+  return mnemonicToSeedSync(mnemonic)
+}
+
+export function deriveXpub(seed: Uint8Array): string {
+  return HDKey.fromMasterSeed(seed).derive(ACCOUNT_PATH).publicExtendedKey
+}
+
+export function derivePrivateKeyHex(seed: Uint8Array, index: number): string {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new RangeError(`derivation index must be a non-negative integer, got ${index}`)
+  }
+  const key = HDKey.fromMasterSeed(seed).derive(`${ACCOUNT_PATH}/${index}`).privateKey
+  if (!key) throw new Error(`could not derive private key at index ${index}`)
+  return Buffer.from(key).toString('hex')
+}
+
+/**
+ * Fail fast on the catastrophic misconfiguration: if the signer's seed does not correspond
+ * to the xpub the web app hands out, deposits go to addresses this signer cannot spend and
+ * sweeps move funds nobody expected. Checked at signer startup.
+ */
+export function assertMatchesXpub(seed: Uint8Array, xpub: string, index = 0): void {
+  const fromSeed = deriveAddress(deriveXpub(seed), index)
+  const fromXpub = deriveAddress(xpub, index)
+  if (fromSeed !== fromXpub) {
+    throw new Error(
+      `signer seed does not match TRON_XPUB: index ${index} derives ${fromSeed} from the seed ` +
+        `but ${fromXpub} from the xpub`,
+    )
+  }
+}
+```
+
+- [ ] **Step 4: Write the failing runner test**
+
+`tests/signer/run.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { mnemonicToSeedSync } from '@scure/bip39'
+import { eq } from 'drizzle-orm'
+import { testDb, truncateAll } from '../helpers/db'
+import { makeUser } from '../helpers/fixtures'
+import type { Db } from '@/lib/db/client'
+import { signerJobs } from '@/lib/db/schema'
+import { assignDepositAddress } from '@/lib/deposits/addresses'
+import { deriveXpub } from '@/lib/signer/keys'
+import { enqueueSweeps } from '@/lib/signer/sweep'
+import { enqueueJob } from '@/lib/signer/jobs'
+import { runOnce } from '@/lib/signer/run'
+import { FakeTron } from '@/lib/tron/fake'
+
+const MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+const SEED = mnemonicToSeedSync(MNEMONIC)
+const XPUB = deriveXpub(SEED)
+const USDT = 1_000_000n
+// Index 99 of the same test wallet, so the hot wallet is provably ours and reproducible.
+const HOT = 'TTTFe9haCY6CACG9iTM8uyL89pFEPy4ctW'
+
+describe('signer runOnce', () => {
+  let db: Db
+
+  beforeAll(async () => {
+    ;({ db } = await testDb())
+  })
+
+  beforeEach(async () => {
+    await truncateAll(db)
+  })
+
+  async function seedSweepableAddress(tron: FakeTron, amount: bigint): Promise<string> {
+    const { address } = await assignDepositAddress(db, { userId: await makeUser(db), xpub: XPUB })
+    tron.deposit({ to: address, amountMicros: amount, blockNumber: 1 })
+    return address
+  }
+
+  it('is idle with no jobs', async () => {
+    const tron = new FakeTron()
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('idle')
+  })
+
+  it('sweeps a deposit address into the hot wallet', async () => {
+    const tron = new FakeTron()
+    const address = await seedSweepableAddress(tron, 25n * USDT)
+    await enqueueSweeps(db, tron, { minMicros: 20n * USDT })
+
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('done')
+
+    expect(tron.broadcasts).toHaveLength(1)
+    expect(tron.broadcasts[0]).toMatchObject({ from: address, to: HOT, amountMicros: 25n * USDT })
+    expect(await tron.trc20Balance(address)).toBe(0n)
+    expect(await tron.trc20Balance(HOT)).toBe(25n * USDT)
+  })
+
+  it('records the broadcast hash on the completed job', async () => {
+    const tron = new FakeTron()
+    await seedSweepableAddress(tron, 25n * USDT)
+    await enqueueSweeps(db, tron, { minMicros: 20n * USDT })
+    await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })
+
+    const [job] = await db.select().from(signerJobs)
+    expect(job.status).toBe('DONE')
+    expect(job.txHash).toBe(tron.broadcasts[0].txHash)
+  })
+
+  it('returns a broadcast failure to PENDING for retry', async () => {
+    const tron = new FakeTron()
+    await seedSweepableAddress(tron, 25n * USDT)
+    await enqueueSweeps(db, tron, { minMicros: 20n * USDT })
+    tron.failNextSend('temporary node error')
+
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('failed')
+
+    const [job] = await db.select().from(signerJobs)
+    expect(job.status).toBe('PENDING')
+    expect(job.lastError).toMatch(/temporary node error/)
+
+    // The retry succeeds and moves the money.
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('done')
+    expect(tron.broadcasts).toHaveLength(1)
+  })
+
+  it('parks an unknown job kind as FAILED without retrying', async () => {
+    await enqueueJob(db, { kind: 'NOT_A_REAL_KIND', idempotencyKey: 'weird', payload: {} })
+    const tron = new FakeTron()
+
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('failed')
+
+    const [job] = await db.select().from(signerJobs)
+    expect(job.status).toBe('FAILED')
+    expect(job.lastError).toMatch(/unknown job kind/i)
+  })
+
+  it('processes one job per call', async () => {
+    const tron = new FakeTron()
+    await seedSweepableAddress(tron, 25n * USDT)
+    await seedSweepableAddress(tron, 30n * USDT)
+    await enqueueSweeps(db, tron, { minMicros: 20n * USDT })
+
+    await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })
+    expect(tron.broadcasts).toHaveLength(1)
+
+    await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })
+    expect(tron.broadcasts).toHaveLength(2)
+
+    expect(await runOnce({ db, tron, seed: SEED, hotWalletAddress: HOT })).toBe('idle')
+  })
+})
+```
+
+- [ ] **Step 5: Write the runner**
+
+`src/lib/signer/run.ts`:
+
+```ts
+import type { Db } from '@/lib/db/client'
+import { TronError, type TronClient } from '@/lib/tron/client'
+import { claimNextJob, completeJob, failJob } from './jobs'
+import { derivePrivateKeyHex } from './keys'
+import type { SweepPayload } from './sweep'
+
+export type SignerDeps = {
+  db: Db
+  tron: TronClient
+  seed: Uint8Array
+  hotWalletAddress: string
+}
+
+export type RunOutcome = 'idle' | 'done' | 'failed'
+
+/**
+ * Claim and execute at most one job. Returning after a single job keeps the loop's failure
+ * blast radius small and lets the caller decide the pacing.
+ */
+export async function runOnce(deps: SignerDeps): Promise<RunOutcome> {
+  const job = await claimNextJob(deps.db)
+  if (!job) return 'idle'
+
+  if (job.kind !== 'SWEEP') {
+    await failJob(deps.db, job.id, `unknown job kind: ${job.kind}`, { retry: false })
+    return 'failed'
+  }
+
+  const payload = job.payload as unknown as SweepPayload
+
+  try {
+    const privateKeyHex = derivePrivateKeyHex(deps.seed, payload.derivationIndex)
+
+    const txHash = await deps.tron.sendTrc20({
+      fromPrivateKeyHex: privateKeyHex,
+      to: deps.hotWalletAddress,
+      amountMicros: BigInt(payload.amountMicros),
+    })
+
+    await completeJob(deps.db, job.id, txHash)
+    return 'done'
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+
+    // A TronError is a chain-side problem: the node was unreachable, the address was out of
+    // energy, the broadcast bounced. All of those can succeed later, so retry until
+    // MAX_ATTEMPTS parks the job for a human.
+    //
+    // Anything else came from our own code — a bad derivation index, a malformed payload —
+    // and will fail identically every time. Retrying it just burns attempts and delays the
+    // alert, so park it immediately.
+    const retry = err instanceof TronError
+    await failJob(deps.db, job.id, message, { retry })
+    return 'failed'
+  }
+}
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+```bash
+pnpm test tests/signer
+pnpm typecheck
+```
+
+Expected: PASS, 9 + 6 + 6 = 21 tests in `tests/signer`.
+
+- [ ] **Step 7: Commit and push**
+
+```bash
+git add src/lib/signer tests/signer
+git commit -m "feat: signer key derivation and sweep execution loop"
+git push origin main
+```
+
+---
+
+## Task 9: Worker and signer process entrypoints
+
+**Files:**
+- Create: `worker/main.ts`, `signer/main.ts`, `src/lib/process/loop.ts`
+- Modify: `package.json` (add `worker` and `signer` scripts)
+- Test: `tests/process/loop.test.ts`
+
+**Interfaces:**
+- Consumes: `pollDeposits`, `enqueueSweeps`, `runOnce`, `loadTronConfig`, `loadSignerSeed`, `assertMatchesXpub`
+- Produces (`src/lib/process/loop.ts`):
+  - `type LoopOptions = { intervalMs: number; signal: AbortSignal; onTick: () => Promise<void>; onError?: (err: unknown) => void }`
+  - `runLoop(opts: LoopOptions): Promise<void>`
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/process/loop.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { runLoop } from '@/lib/process/loop'
+
+describe('runLoop', () => {
+  it('ticks repeatedly until aborted', async () => {
+    const controller = new AbortController()
+    let ticks = 0
+
+    const loop = runLoop({
+      intervalMs: 1,
+      signal: controller.signal,
+      onTick: async () => {
+        ticks++
+        if (ticks >= 5) controller.abort()
+      },
+    })
+
+    await loop
+    expect(ticks).toBe(5)
+  })
+
+  it('survives a throwing tick and reports it', async () => {
+    const controller = new AbortController()
+    const errors: unknown[] = []
+    let ticks = 0
+
+    await runLoop({
+      intervalMs: 1,
+      signal: controller.signal,
+      onTick: async () => {
+        ticks++
+        if (ticks === 1) throw new Error('transient')
+        if (ticks >= 3) controller.abort()
+      },
+      onError: (err) => errors.push(err),
+    })
+
+    expect(ticks).toBe(3)
+    expect(errors).toHaveLength(1)
+    expect((errors[0] as Error).message).toBe('transient')
+  })
+
+  it('does not tick at all if aborted before starting', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    let ticks = 0
+
+    await runLoop({
+      intervalMs: 1,
+      signal: controller.signal,
+      onTick: async () => {
+        ticks++
+      },
+    })
+
+    expect(ticks).toBe(0)
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `pnpm test tests/process/loop.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/process/loop"`.
+
+- [ ] **Step 3: Write the loop**
+
+`src/lib/process/loop.ts`:
+
+```ts
+export type LoopOptions = {
+  intervalMs: number
+  signal: AbortSignal
+  onTick: () => Promise<void>
+  onError?: (err: unknown) => void
+}
+
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms)
+    signal.addEventListener('abort', finish, { once: true })
+    function finish() {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+  })
+}
+
+/**
+ * Tick until aborted. A throwing tick is reported and the loop continues — a long-running
+ * chain watcher that exits on the first RPC hiccup is worse than useless.
+ */
+export async function runLoop(opts: LoopOptions): Promise<void> {
+  while (!opts.signal.aborted) {
+    try {
+      await opts.onTick()
+    } catch (err) {
+      opts.onError?.(err)
+    }
+    if (opts.signal.aborted) break
+    await delay(opts.intervalMs, opts.signal)
+  }
+}
+```
+
+- [ ] **Step 4: Write the worker entrypoint**
+
+`worker/main.ts`:
+
+```ts
+import 'dotenv/config'
+import { createDb } from '../src/lib/db/client'
+import { loadTronConfig } from '../src/lib/tron/config'
+import { createTronGridClient } from '../src/lib/tron/trongrid'
+import { pollDeposits } from '../src/lib/deposits/poller'
+import { enqueueSweeps } from '../src/lib/signer/sweep'
+import { runLoop } from '../src/lib/process/loop'
+
+const POLL_INTERVAL_MS = Number(process.env.WORKER_INTERVAL_MS ?? '15000')
+
+const url = process.env.DATABASE_URL
+if (!url) throw new Error('DATABASE_URL is not set')
+
+// The worker is watch-only. If a seed leaks into its environment, refuse to start rather
+// than quietly run a process that could spend.
+if (process.env.TRON_MNEMONIC) {
+  throw new Error('TRON_MNEMONIC must not be set in the worker environment')
+}
+
+const config = loadTronConfig()
+const { db, pool } = createDb(url)
+const tron = createTronGridClient(config)
+const controller = new AbortController()
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    console.log(`[worker] ${signal} received, shutting down`)
+    controller.abort()
+  })
+}
+
+console.log(`[worker] polling ${config.network} every ${POLL_INTERVAL_MS}ms`)
+
+await runLoop({
+  intervalMs: POLL_INTERVAL_MS,
+  signal: controller.signal,
+  onError: (err) => console.error('[worker] tick failed:', err),
+  onTick: async () => {
+    const result = await pollDeposits(db, tron, { confirmations: config.confirmations })
+    if (result.newTransfers || result.credited.length) {
+      console.log(
+        `[worker] head=${result.headBlock} new=${result.newTransfers} credited=${result.credited.length}`,
+      )
+    }
+    const queued = await enqueueSweeps(db, tron, { minMicros: config.sweepMinMicros })
+    if (queued) console.log(`[worker] queued ${queued} sweep job(s)`)
+  },
+})
+
+await pool.end()
+console.log('[worker] stopped')
+```
+
+- [ ] **Step 5: Write the signer entrypoint**
+
+`signer/main.ts`:
+
+```ts
+import 'dotenv/config'
+import { createDb } from '../src/lib/db/client'
+import { loadTronConfig } from '../src/lib/tron/config'
+import { createTronGridClient } from '../src/lib/tron/trongrid'
+import { loadSignerSeed, assertMatchesXpub } from '../src/lib/signer/keys'
+import { runOnce } from '../src/lib/signer/run'
+import { runLoop } from '../src/lib/process/loop'
+
+const INTERVAL_MS = Number(process.env.SIGNER_INTERVAL_MS ?? '5000')
+
+const url = process.env.DATABASE_URL
+if (!url) throw new Error('DATABASE_URL is not set')
+
+const config = loadTronConfig()
+const seed = loadSignerSeed()
+
+// Fail fast if the seed and the xpub the web app publishes are different wallets.
+assertMatchesXpub(seed, config.xpub)
+
+const { db, pool } = createDb(url)
+const tron = createTronGridClient(config)
+const controller = new AbortController()
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    console.log(`[signer] ${signal} received, shutting down`)
+    controller.abort()
+  })
+}
+
+console.log(`[signer] watching for jobs on ${config.network} every ${INTERVAL_MS}ms`)
+
+await runLoop({
+  intervalMs: INTERVAL_MS,
+  signal: controller.signal,
+  onError: (err) => console.error('[signer] tick failed:', err),
+  onTick: async () => {
+    // Drain the queue rather than sleeping between jobs when work is waiting.
+    let outcome = await runOnce({ db, tron, seed, hotWalletAddress: config.hotWalletAddress })
+    while (outcome !== 'idle') {
+      console.log(`[signer] job ${outcome}`)
+      outcome = await runOnce({ db, tron, seed, hotWalletAddress: config.hotWalletAddress })
+    }
+  },
+})
+
+await pool.end()
+console.log('[signer] stopped')
+```
+
+- [ ] **Step 6: Add the scripts**
+
+In `package.json`:
+
+```json
+    "worker": "tsx worker/main.ts",
+    "signer": "tsx signer/main.ts",
+```
+
+- [ ] **Step 7: Verify**
+
+```bash
+pnpm test tests/process/loop.test.ts
+pnpm typecheck
+pnpm build
+```
+
+Expected: PASS, 3 tests; typecheck and build clean. Also confirm the worker refuses a leaked
+seed:
+
+```bash
+TRON_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" pnpm worker
+```
+
+Expected: exits immediately with `TRON_MNEMONIC must not be set in the worker environment`.
+
+- [ ] **Step 8: Commit and push**
+
+```bash
+git add worker signer src/lib/process tests/process package.json
+git commit -m "feat: worker and signer process entrypoints with graceful shutdown"
+git push origin main
+```
+
+---
+
+## Task 10: Deposit address API and page
+
+**Files:**
+- Create: `src/app/api/me/deposit-address/route.ts`, `src/app/deposit/page.tsx`
+- Modify: `src/components/Nav.tsx` (add a Deposit link)
+
+**Interfaces:**
+- Consumes: `requireUser`, `assignDepositAddress`, `getDepositAddress`, `loadTronConfig`
+- Produces: `POST /api/me/deposit-address` → `201 { address, derivationIndex, created }`
+
+The address is assigned lazily on first request rather than at signup, so users who never
+deposit never consume a derivation index.
+
+- [ ] **Step 1: Write the route**
+
+`src/app/api/me/deposit-address/route.ts`:
+
+```ts
+import { getDb } from '@/lib/db/client'
+import { loadTronConfig } from '@/lib/tron/config'
+import { assignDepositAddress, getDepositAddress } from '@/lib/deposits/addresses'
+import { handle, ok } from '@/lib/http/respond'
+import { requireUser } from '@/lib/http/auth'
+
+export const dynamic = 'force-dynamic'
+
+export async function GET(): Promise<Response> {
+  return handle(async () => {
+    const user = await requireUser()
+    return ok({ depositAddress: await getDepositAddress(getDb(), user.id) })
+  })
+}
+
+export async function POST(): Promise<Response> {
+  return handle(async () => {
+    const user = await requireUser()
+    const config = loadTronConfig()
+    const assigned = await assignDepositAddress(getDb(), { userId: user.id, xpub: config.xpub })
+    return ok(assigned, { status: assigned.created ? 201 : 200 })
+  })
+}
+```
+
+- [ ] **Step 2: Write the page**
+
+`src/app/deposit/page.tsx`:
+
+```tsx
+import { redirect } from 'next/navigation'
+import { getDb } from '@/lib/db/client'
+import { currentUser } from '@/lib/http/auth'
+import { getDepositAddress } from '@/lib/deposits/addresses'
+import { loadTronConfig } from '@/lib/tron/config'
+import { formatUsdt } from '@/lib/money/units'
+import { DepositAddressPanel } from '@/components/DepositAddressPanel'
+
+export const dynamic = 'force-dynamic'
+
+export default async function DepositPage() {
+  const user = await currentUser()
+  if (!user) redirect('/login')
+
+  const config = loadTronConfig()
+  const existing = await getDepositAddress(getDb(), user.id)
+
+  return (
+    <>
+      <h1>Deposit USDT</h1>
+      <p>
+        Send <strong>USDT-TRC20</strong> on the Tron {config.network} network only. Funds sent on
+        any other network or in any other token are unrecoverable.
+      </p>
+      <p className="estimate">
+        Deposits are credited after {config.confirmations} confirmations. Amounts below{' '}
+        {formatUsdt(config.sweepMinMicros)} USDT remain at your deposit address until it is
+        economical to consolidate them — your balance is credited either way.
+      </p>
+      <DepositAddressPanel initialAddress={existing?.address ?? null} />
+    </>
+  )
+}
+```
+
+`src/components/DepositAddressPanel.tsx`:
+
+```tsx
+'use client'
+
+import { useState } from 'react'
+import { apiPost, ApiError } from '@/lib/client/api'
+
+export function DepositAddressPanel({ initialAddress }: { initialAddress: string | null }) {
+  const [address, setAddress] = useState(initialAddress)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function reveal() {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await apiPost<{ address: string }>('/api/me/deposit-address')
+      setAddress(result.address)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (address) {
+    return (
+      <fieldset>
+        <legend>Your deposit address</legend>
+        <p>
+          <code>{address}</code>
+        </p>
+        <button onClick={() => navigator.clipboard.writeText(address)}>Copy</button>
+      </fieldset>
+    )
+  }
+
+  return (
+    <fieldset>
+      <legend>Your deposit address</legend>
+      {error && <p className="error">{error}</p>}
+      <button onClick={reveal} disabled={busy}>
+        {busy ? 'Generating…' : 'Show my deposit address'}
+      </button>
+    </fieldset>
+  )
+}
+```
+
+- [ ] **Step 3: Add the nav link**
+
+In `src/components/Nav.tsx`, inside the signed-in branch, immediately before the `Account`
+link:
+
+```tsx
+          <Link href="/deposit">Deposit</Link>
+          {' · '}
+```
+
+- [ ] **Step 4: Verify**
+
+```bash
+pnpm typecheck
+pnpm build
+pnpm test
+```
+
+Expected: build succeeds with `/deposit` and `/api/me/deposit-address` listed; all tests pass.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add src/app/deposit src/app/api/me/deposit-address src/components
+git commit -m "feat: deposit address API and page"
+git push origin main
+```
+
+---
+
+## Task 11: Chain reconciliation
+
+Slice 1's ledger proves internal consistency. This proves the ledger matches the chain — the
+check that would actually catch a missed deposit, a double credit, or a sweep to the wrong
+address.
+
+**Files:**
+- Create: `src/lib/reconcile/chain.ts`, `scripts/reconcile.ts`
+- Modify: `package.json`
+- Test: `tests/reconcile/chain.test.ts`
+
+**Interfaces:**
+- Consumes: `TronClient`, `listDepositAddresses`, `balanceOf`, `houseAccount`
+- Produces (`src/lib/reconcile/chain.ts`):
+  - `type Reconciliation = { onChainMicros: bigint; ledgerCustodyMicros: bigint; adminCreditedMicros: bigint; differenceMicros: bigint; balanced: boolean; perAddress: Array<{ address: string; onChain: bigint }> }`
+  - `reconcileChain(db: Db, tron: TronClient, hotWalletAddress: string): Promise<Reconciliation>`
+
+`ledgerCustodyMicros` is `−balance(hot_wallet)` (see "Ledger convention" above). Admin credits
+are fabricated money with no chain backing, so they are reported separately and subtracted
+before deciding whether the books balance — otherwise Slice 1's test data would permanently
+show a discrepancy.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/reconcile/chain.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { HDKey } from '@scure/bip32'
+import { mnemonicToSeedSync } from '@scure/bip39'
+import { testDb, truncateAll } from '../helpers/db'
+import { makeUser, makeAdmin } from '../helpers/fixtures'
+import type { Db } from '@/lib/db/client'
+import { ACCOUNT_PATH } from '@/lib/tron/address'
+import { assignDepositAddress } from '@/lib/deposits/addresses'
+import { recordSeenTransfer, creditConfirmedDeposits } from '@/lib/deposits/credit'
+import { creditUser } from '@/lib/admin/credit'
+import { reconcileChain } from '@/lib/reconcile/chain'
+import { derivePrivateKeyHex } from '@/lib/signer/keys'
+import { FakeTron } from '@/lib/tron/fake'
+
+const MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+const SEED = mnemonicToSeedSync(MNEMONIC)
+const XPUB = HDKey.fromMasterSeed(SEED).derive(ACCOUNT_PATH).publicExtendedKey
+const USDT = 1_000_000n
+// Index 99 of the same test wallet, so the hot wallet is provably ours and reproducible.
+const HOT = 'TTTFe9haCY6CACG9iTM8uyL89pFEPy4ctW'
+
+describe('reconcileChain', () => {
+  let db: Db
+
+  beforeAll(async () => {
+    ;({ db } = await testDb())
+  })
+
+  beforeEach(async () => {
+    await truncateAll(db)
+  })
+
+  it('balances on an empty system', async () => {
+    const result = await reconcileChain(db, new FakeTron(), HOT)
+    expect(result).toMatchObject({
+      onChainMicros: 0n,
+      ledgerCustodyMicros: 0n,
+      differenceMicros: 0n,
+      balanced: true,
+    })
+  })
+
+  it('balances after a real deposit is credited', async () => {
+    const user = await makeUser(db)
+    const { address } = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+
+    const tron = new FakeTron()
+    const transfer = tron.deposit({ to: address, amountMicros: 60n * USDT, blockNumber: 100 })
+    await recordSeenTransfer(db, transfer)
+    await creditConfirmedDeposits(db, 200, 19)
+
+    const result = await reconcileChain(db, tron, HOT)
+    expect(result.onChainMicros).toBe(60n * USDT)
+    expect(result.ledgerCustodyMicros).toBe(60n * USDT)
+    expect(result.balanced).toBe(true)
+  })
+
+  it('still balances once funds are swept to the hot wallet', async () => {
+    const user = await makeUser(db)
+    const { address } = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+
+    const tron = new FakeTron()
+    const transfer = tron.deposit({ to: address, amountMicros: 60n * USDT, blockNumber: 100 })
+    await recordSeenTransfer(db, transfer)
+    await creditConfirmedDeposits(db, 200, 19)
+
+    // Perform the sweep for real, with the key the signer would use for index 0.
+    await tron.sendTrc20({
+      fromPrivateKeyHex: derivePrivateKeyHex(SEED, 0),
+      to: HOT,
+      amountMicros: 60n * USDT,
+    })
+
+    expect(await tron.trc20Balance(address)).toBe(0n)
+    expect(await tron.trc20Balance(HOT)).toBe(60n * USDT)
+
+    // A sweep moves money between two accounts we control, so custody is unchanged.
+    const result = await reconcileChain(db, tron, HOT)
+    expect(result.onChainMicros).toBe(60n * USDT)
+    expect(result.ledgerCustodyMicros).toBe(60n * USDT)
+    expect(result.balanced).toBe(true)
+  })
+
+  it('reports admin credits separately so they do not read as corruption', async () => {
+    const admin = await makeAdmin(db)
+    const user = await makeUser(db)
+    await creditUser(db, { userId: user, amount: 100n * USDT, reference: 'seed', creditedBy: admin })
+
+    const result = await reconcileChain(db, new FakeTron(), HOT)
+    expect(result.adminCreditedMicros).toBe(100n * USDT)
+    expect(result.ledgerCustodyMicros).toBe(100n * USDT)
+    // Chain holds nothing, but 100 of the custody figure is fabricated, so this balances.
+    expect(result.differenceMicros).toBe(0n)
+    expect(result.balanced).toBe(true)
+  })
+
+  it('flags a genuine shortfall', async () => {
+    const user = await makeUser(db)
+    const { address } = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+
+    const tron = new FakeTron()
+    const transfer = tron.deposit({ to: address, amountMicros: 60n * USDT, blockNumber: 100 })
+    await recordSeenTransfer(db, transfer)
+    await creditConfirmedDeposits(db, 200, 19)
+
+    // The money leaves the chain without any corresponding ledger movement.
+    const drained = new FakeTron()
+    const result = await reconcileChain(db, drained, HOT)
+
+    expect(result.onChainMicros).toBe(0n)
+    expect(result.ledgerCustodyMicros).toBe(60n * USDT)
+    expect(result.differenceMicros).toBe(-60n * USDT)
+    expect(result.balanced).toBe(false)
+  })
+
+  it('lists the per-address on-chain balances it summed', async () => {
+    const user = await makeUser(db)
+    const { address } = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+    const tron = new FakeTron()
+    tron.deposit({ to: address, amountMicros: 3n * USDT, blockNumber: 1 })
+
+    const result = await reconcileChain(db, tron, HOT)
+    expect(result.perAddress).toContainEqual({ address, onChain: 3n * USDT })
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `pnpm test tests/reconcile/chain.test.ts`
+Expected: FAIL — `Failed to resolve import "@/lib/reconcile/chain"`.
+
+- [ ] **Step 3: Write the implementation**
+
+`src/lib/reconcile/chain.ts`:
+
+```ts
+import { eq, sql } from 'drizzle-orm'
+import type { Db } from '@/lib/db/client'
+import { ledgerEntries, ledgerTransactions } from '@/lib/db/schema'
+import { balanceOf, houseAccount } from '@/lib/ledger/accounts'
+import { listDepositAddresses } from '@/lib/deposits/addresses'
+import type { TronClient } from '@/lib/tron/client'
+
+export type Reconciliation = {
+  onChainMicros: bigint
+  ledgerCustodyMicros: bigint
+  adminCreditedMicros: bigint
+  differenceMicros: bigint
+  balanced: boolean
+  perAddress: Array<{ address: string; onChain: bigint }>
+}
+
+/**
+ * Compare what the chain holds against what the ledger says we hold.
+ *
+ * `hot_wallet` is a chain-custody account carried with inverted sign (see the plan's
+ * "Ledger convention"), so the ledger's view of custody is its negated balance.
+ *
+ * Admin credits from Slice 1 are money that was never on chain. They are reported and
+ * netted out separately, so leftover test data does not masquerade as a shortfall.
+ */
+export async function reconcileChain(
+  db: Db,
+  tron: TronClient,
+  hotWalletAddress: string,
+): Promise<Reconciliation> {
+  const addresses = await listDepositAddresses(db)
+  const perAddress: Array<{ address: string; onChain: bigint }> = []
+  let onChainMicros = 0n
+
+  for (const { address } of addresses) {
+    const onChain = await tron.trc20Balance(address)
+    perAddress.push({ address, onChain })
+    onChainMicros += onChain
+  }
+
+  const hotOnChain = await tron.trc20Balance(hotWalletAddress)
+  perAddress.push({ address: hotWalletAddress, onChain: hotOnChain })
+  onChainMicros += hotOnChain
+
+  const ledgerCustodyMicros = -(await balanceOf(db, await houseAccount(db, 'hot_wallet')))
+
+  const adminRows = await db
+    .select({ total: sql<string>`COALESCE(SUM(${ledgerEntries.amount}), 0)` })
+    .from(ledgerEntries)
+    .innerJoin(ledgerTransactions, eq(ledgerTransactions.id, ledgerEntries.txId))
+    .where(
+      sql`${ledgerTransactions.kind} = 'ADMIN_CREDIT' AND ${ledgerEntries.accountId} = (
+        SELECT id FROM accounts WHERE kind = 'hot_wallet' LIMIT 1
+      )`,
+    )
+  const adminCreditedMicros = -BigInt(adminRows[0]?.total ?? '0')
+
+  const differenceMicros = onChainMicros - (ledgerCustodyMicros - adminCreditedMicros)
+
+  return {
+    onChainMicros,
+    ledgerCustodyMicros,
+    adminCreditedMicros,
+    differenceMicros,
+    balanced: differenceMicros === 0n,
+    perAddress,
+  }
+}
+```
+
+- [ ] **Step 4: Write the CLI**
+
+`scripts/reconcile.ts`:
+
+```ts
+import 'dotenv/config'
+import { createDb } from '../src/lib/db/client'
+import { loadTronConfig } from '../src/lib/tron/config'
+import { createTronGridClient } from '../src/lib/tron/trongrid'
+import { reconcileChain } from '../src/lib/reconcile/chain'
+import { formatUsdt } from '../src/lib/money/units'
+
+const url = process.env.DATABASE_URL
+if (!url) {
+  console.error('DATABASE_URL is not set')
+  process.exit(1)
+}
+
+const config = loadTronConfig()
+const { db, pool } = createDb(url)
+const result = await reconcileChain(db, createTronGridClient(config), config.hotWalletAddress)
+await pool.end()
+
+console.log(`on chain:        ${formatUsdt(result.onChainMicros)} USDT`)
+console.log(`ledger custody:  ${formatUsdt(result.ledgerCustodyMicros)} USDT`)
+console.log(`admin credits:   ${formatUsdt(result.adminCreditedMicros)} USDT (not chain-backed)`)
+console.log(`difference:      ${formatUsdt(result.differenceMicros)} USDT`)
+
+for (const row of result.perAddress) {
+  if (row.onChain > 0n) console.log(`  ${row.address}  ${formatUsdt(row.onChain)}`)
+}
+
+if (!result.balanced) {
+  console.error('\nRECONCILIATION FAILED — treat as a production incident')
+  process.exit(1)
+}
+console.log('\nbalanced')
+```
+
+Add to `package.json` scripts: `"reconcile": "tsx scripts/reconcile.ts"`.
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+```bash
+pnpm test tests/reconcile/chain.test.ts
+pnpm typecheck
+```
+
+Expected: PASS, 6 tests.
+
+- [ ] **Step 6: Commit and push**
+
+```bash
+git add src/lib/reconcile scripts/reconcile.ts tests/reconcile package.json
+git commit -m "feat: chain reconciliation comparing ledger custody against on-chain balances"
+git push origin main
+```
+
+---
+
+## Task 12: Live Nile testnet verification
+
+Everything so far ran against the fake. This is the first contact with a real chain, and it is
+deliberately the last task: by now the accounting is already proven.
+
+**Files:**
+- Create: `docs/superpowers/plans/slice-2-walkthrough.md`
+
+**Prerequisites** — obtain these before starting:
+- A free TronGrid API key from <https://www.trongrid.io/dashboard>
+- A Nile testnet TRX faucet top-up from <https://nileex.io/join/getJoinPage>
+- The Nile USDT contract address from <https://nileex.io> (it is **not** the mainnet
+  `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`; using the mainnet address on Nile silently finds
+  nothing)
+
+- [ ] **Step 1: Generate a throwaway wallet**
+
+Never reuse a mnemonic that has held real funds.
+
+```bash
+node --input-type=module -e "
+import { generateMnemonic } from '@scure/bip39'
+import { wordlist } from '@scure/bip39/wordlists/english.js'
+console.log(generateMnemonic(wordlist, 128))
+"
+```
+
+- [ ] **Step 2: Derive the xpub and hot wallet address from it**
+
+```bash
+TRON_MNEMONIC='<the mnemonic>' node --input-type=module -e "
+import { loadSignerSeed, deriveXpub } from './src/lib/signer/keys.ts'
+import { deriveAddress } from './src/lib/tron/address.ts'
+const seed = loadSignerSeed()
+const xpub = deriveXpub(seed)
+console.log('TRON_XPUB=' + xpub)
+console.log('index 0 (use as hot wallet):', deriveAddress(xpub, 0))
+"
+```
+
+Run it through `tsx` if the direct `.ts` import is rejected: `pnpm tsx -e '<same script>'`.
+
+- [ ] **Step 3: Fill in `.env`**
+
+Set `TRON_NETWORK=nile`, `TRON_FULL_HOST=https://nile.trongrid.io`, `TRONGRID_API_KEY`,
+`TRON_USDT_CONTRACT` (Nile's), `TRON_XPUB`, and `TRON_HOT_WALLET_ADDRESS`. Set
+`TRON_MNEMONIC` **only** in the shell that runs the signer.
+
+Lower the thresholds so the walkthrough does not need large amounts:
+
+```
+TRON_CONFIRMATIONS=1
+TRON_SWEEP_MIN_MICROS=1000000
+```
+
+Record in the walkthrough that these are test values and that production uses 19 and
+20000000.
+
+- [ ] **Step 4: Confirm the client can read the live chain**
+
+```bash
+pnpm tsx -e "
+import 'dotenv/config'
+import { loadTronConfig } from './src/lib/tron/config'
+import { createTronGridClient } from './src/lib/tron/trongrid'
+const c = createTronGridClient(loadTronConfig())
+console.log('head block:', await c.headBlock())
+console.log('hot wallet USDT:', await c.trc20Balance(process.env.TRON_HOT_WALLET_ADDRESS))
+console.log('hot wallet TRX (SUN):', await c.trxBalance(process.env.TRON_HOT_WALLET_ADDRESS))
+"
+```
+
+Expected: a plausible Nile height and two balances. A `RPC_FAILED` here means the API key or
+host is wrong — fix it before continuing.
+
+- [ ] **Step 5: Assign a deposit address and fund it**
+
+Start the app, sign up, visit `/deposit`, and click through to reveal the address. Send Nile
+USDT to it from the faucet or another Nile wallet. Also send a little TRX to that deposit
+address — sweeping needs energy and bandwidth, and without TRX the sweep will fail with
+`INSUFFICIENT_ENERGY`, which is itself worth observing once.
+
+- [ ] **Step 6: Run the worker and watch the deposit credit**
+
+```bash
+pnpm worker
+```
+
+Record: the head block, the cycle at which `new=1` appears, and the cycle at which
+`credited=1` appears. Then confirm in the UI that the account balance rose, and in the
+database that exactly one deposit row exists:
+
+```bash
+docker compose exec -T db psql -U botsbattle -d botsbattle -c \
+  "SELECT tx_hash, log_index, amount, status FROM deposits;"
+```
+
+- [ ] **Step 7: Restart the worker and confirm nothing double-credits**
+
+Stop the worker, start it again, let it run two full cycles, and re-check the balance and the
+deposit row count. Both must be unchanged. This is the idempotency claim under real chain
+data rather than fake data.
+
+- [ ] **Step 8: Run the signer and watch the sweep**
+
+In a shell that has `TRON_MNEMONIC` set:
+
+```bash
+pnpm signer
+```
+
+Record the broadcast transaction hash, then verify on <https://nile.tronscan.org> that the
+USDT moved from the deposit address to the hot wallet. Confirm the job row:
+
+```bash
+docker compose exec -T db psql -U botsbattle -d botsbattle -c \
+  "SELECT kind, status, attempts, tx_hash, last_error FROM signer_jobs;"
+```
+
+- [ ] **Step 9: Reconcile against the live chain**
+
+```bash
+pnpm reconcile
+```
+
+Expected: `balanced`, with `on chain` equal to `ledger custody` minus any admin credits. If it
+reports a difference, stop — that is the failure mode this whole slice exists to prevent, and
+the walkthrough must record the actual numbers rather than being adjusted until it passes.
+
+- [ ] **Step 10: Write up the walkthrough**
+
+Create `docs/superpowers/plans/slice-2-walkthrough.md` recording, as observed values: the Nile
+addresses used, the deposit transaction hash, the block it landed in, the head block at which
+it credited, the sweep transaction hash, the `pnpm reconcile` output, and anything that
+behaved differently from this plan. Follow the structure of `slice-1-walkthrough.md`.
+
+**Do not put the mnemonic in the walkthrough**, or anywhere else in the repository.
+
+- [ ] **Step 11: Restore production thresholds**
+
+Set `TRON_CONFIRMATIONS=19` and `TRON_SWEEP_MIN_MICROS=20000000` back in `.env.example`, and
+confirm `.env` is still gitignored:
+
+```bash
+git check-ignore -v .env
+```
+
+Expected: it prints the matching `.gitignore` rule. If it prints nothing, `.env` is tracked —
+stop and fix that before committing anything.
+
+- [ ] **Step 12: Commit and push**
+
+```bash
+git add docs/superpowers/plans/slice-2-walkthrough.md .env.example
+git commit -m "docs: Slice 2 live Nile testnet walkthrough"
+git push origin main
+```
+
+---
+
+## Done when
+
+- `pnpm test` is green, including the xpub/private-key cross-check over 20 indices and the
+  concurrent index-allocation tests
+- `pnpm typecheck` and `pnpm build` are clean
+- A real Nile deposit credited exactly once across a worker restart
+- A real sweep moved funds to the hot wallet, verified on Tronscan
+- `pnpm reconcile` reports `balanced` against the live chain
+- No file in the repository contains a mnemonic, and the worker refuses to start if one is
+  present in its environment
+
+## Deliberately not in this slice
+
+Withdrawals, the admin approval queue, TOTP enrolment, `balance_cache` and its reconciliation
+job, visual design, and deployment. Slices 3 and 4 cover them.
+
+## Note for whoever writes Slices 3 and 4
+
+Slice 1 was planned in full and then executed, and execution surfaced five real defects the
+plan could not have predicted — including one, `postTransaction` not being atomic, that was a
+genuine money bug. Expect the same here. The Slice 3 plan should be re-read against the
+interfaces this slice actually produces before it is executed, not merely against what this
+plan says they will be.
