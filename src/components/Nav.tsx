@@ -14,6 +14,8 @@ export async function Nav() {
       {' · '}
       {user ? (
         <>
+          <Link href="/deposit">Deposit</Link>
+          {' · '}
           <Link href="/account">Account</Link>
           {user.isAdmin && (
             <>
