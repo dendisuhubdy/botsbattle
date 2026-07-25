@@ -75,7 +75,22 @@ In a non-refund settlement where the winning pool is a large fraction of the tot
 cd /Users/dendisuhubdy/Github/botsbattle
 pnpm init
 pnpm add next@15 react@19 react-dom@19 drizzle-orm pg zod @node-rs/argon2
-pnpm add -D typescript @types/node @types/react @types/react-dom @types/pg vitest fast-check tsx dotenv
+pnpm add -D typescript@5 @types/node @types/react @types/react-dom @types/pg vitest fast-check tsx dotenv
+```
+
+**Pin TypeScript to 5.x.** TypeScript 7 (the Go-based compiler) changes the API that Next
+uses to read `tsconfig.json`; under it, `next build` cannot resolve the `@/*` path alias and
+cannot load a `.ts` config at all. `tsc --noEmit` passes either way, so the failure only
+appears at build time.
+
+**Use `next.config.mjs`, not `.ts`,** for the same reason — it removes the config loader's
+dependency on the TypeScript API entirely.
+
+pnpm skips build scripts by default; esbuild (which vitest needs) has one. Add to
+`package.json` before installing:
+
+```json
+  "pnpm": { "onlyBuiltDependencies": ["esbuild", "sharp", "unrs-resolver"] }
 ```
 
 - [ ] **Step 2: Write the config files**
@@ -116,6 +131,7 @@ pnpm add -D typescript @types/node @types/react @types/react-dom @types/pg vites
     "isolatedModules": true,
     "incremental": true,
     "plugins": [{ "name": "next" }],
+    "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
@@ -123,12 +139,11 @@ pnpm add -D typescript @types/node @types/react @types/react-dom @types/pg vites
 }
 ```
 
-`next.config.ts`:
+`next.config.mjs`:
 
-```ts
-import type { NextConfig } from 'next'
-
-const nextConfig: NextConfig = {
+```js
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   serverExternalPackages: ['pg', '@node-rs/argon2'],
 }
 
@@ -3470,14 +3485,14 @@ export async function requireAdmin(): Promise<SessionUser> {
 `src/app/api/auth/signup/route.ts`:
 
 ```ts
-import { z } from 'zod'
+import * as z from 'zod'
 import { cookies } from 'next/headers'
 import { getDb } from '@/lib/db/client'
 import { login, signup, SESSION_COOKIE, SESSION_TTL_DAYS } from '@/lib/auth/session'
 import { handle, ok } from '@/lib/http/respond'
 import { HttpError } from '@/lib/http/auth'
 
-const Body = z.object({ email: z.string().email(), password: z.string().min(10) })
+const Body = z.object({ email: z.email(), password: z.string().min(10) })
 
 export async function POST(request: Request): Promise<Response> {
   return handle(async () => {
@@ -3505,14 +3520,14 @@ export async function POST(request: Request): Promise<Response> {
 `src/app/api/auth/login/route.ts` — identical except it calls only `login` and returns `200`:
 
 ```ts
-import { z } from 'zod'
+import * as z from 'zod'
 import { cookies } from 'next/headers'
 import { getDb } from '@/lib/db/client'
 import { login, SESSION_COOKIE, SESSION_TTL_DAYS } from '@/lib/auth/session'
 import { handle, ok } from '@/lib/http/respond'
 import { HttpError } from '@/lib/http/auth'
 
-const Body = z.object({ email: z.string().email(), password: z.string().min(1) })
+const Body = z.object({ email: z.email(), password: z.string().min(1) })
 
 export async function POST(request: Request): Promise<Response> {
   return handle(async () => {
@@ -3649,7 +3664,7 @@ export async function GET(
 `src/app/api/fights/[id]/bets/route.ts` — `stake` arrives as a decimal USDT string and is parsed with `parseUsdt`, so no float ever touches the request path:
 
 ```ts
-import { z } from 'zod'
+import * as z from 'zod'
 import { getDb } from '@/lib/db/client'
 import { placeBet } from '@/lib/bets/place'
 import { parseUsdt } from '@/lib/money/units'
@@ -3786,7 +3801,7 @@ Add to `package.json` scripts:
 `src/app/api/admin/fights/route.ts`:
 
 ```ts
-import { z } from 'zod'
+import * as z from 'zod'
 import { getDb } from '@/lib/db/client'
 import { createFight, listFights, poolTotals } from '@/lib/fights/repo'
 import { handle, ok } from '@/lib/http/respond'
@@ -3799,7 +3814,7 @@ const Body = z.object({
   fighterA: z.string().min(1).max(120),
   fighterB: z.string().min(1).max(120),
   streamEmbedUrl: z.string().url().nullish(),
-  lockAt: z.string().datetime(),
+  lockAt: z.iso.datetime(),
   rakeBps: z.number().int().min(0).max(2000).optional(),
 })
 
@@ -3860,7 +3875,7 @@ export async function POST(
 `src/app/api/admin/fights/[id]/settle/route.ts`:
 
 ```ts
-import { z } from 'zod'
+import * as z from 'zod'
 import { getDb } from '@/lib/db/client'
 import { settleFight } from '@/lib/settlement/settle'
 import { handle, ok } from '@/lib/http/respond'
@@ -3927,7 +3942,7 @@ export async function GET(): Promise<Response> {
 `src/app/api/admin/credits/route.ts`:
 
 ```ts
-import { z } from 'zod'
+import * as z from 'zod'
 import { getDb } from '@/lib/db/client'
 import { creditUser } from '@/lib/admin/credit'
 import { parseUsdt } from '@/lib/money/units'
@@ -3935,7 +3950,7 @@ import { handle, ok } from '@/lib/http/respond'
 import { HttpError, requireAdmin } from '@/lib/http/auth'
 
 const Body = z.object({
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   amount: z.string(),
   reference: z.string().min(4).max(64),
 })
