@@ -275,34 +275,40 @@ Ordered so the riskiest correctness work is complete before any chain complexity
 This is the entire product minus money movement, and it is where the settlement invariant is
 proven against thousands of generated pools.
 
-**Slice 2 — Deposits.** Worker, xpub address derivation, confirmation tracking, sweeps.
-Added to accounting already known to be correct.
+**Slice 2 — Deposits, signer, and sweeps.** Worker, xpub address derivation, confirmation
+tracking, the signer process, and sweeps. Added to accounting already known to be correct.
 
-**Slice 3 — Withdrawals.** Signer process, admin approval queue, TOTP enrolment.
+**Slice 3 — Withdrawals.** Admin approval queue, TOTP enrolment, broadcast and confirmation.
 
 **Slice 4 — Deployment.** Docker Compose on the droplet.
 
 Each slice gets its own implementation plan.
+
+> **Revision, 2026-07-25.** Slices 2 and 3 were originally split with sweeps in Slice 2 and the
+> signer in Slice 3. That is not buildable: sweeping a deposit address requires the master
+> seed, which only the signer holds. The signer therefore moves into Slice 2, where sweeping
+> is its first job, and Slice 3 covers withdrawals only. Slice 1 is complete; its plan and
+> walkthrough are in `docs/superpowers/plans/`.
 
 ## Deployment
 
 Single DigitalOcean droplet (4 GB minimum), Docker Compose: `caddy`, `web`, `db`, `worker`,
 `signer`. The signer and database have no published ports. UFW permits 22, 80, 443 only.
 
-### TLS without a domain
+### TLS
 
-No hostname means no trusted certificate, which would put passwords, session cookies, TOTP
-codes and withdrawal addresses on the wire in cleartext and disable `Secure` cookies. For a
-platform holding customer funds this is not an acceptable launch state.
+The production domain is **botsfight.com**. Caddy obtains and renews a Let's Encrypt
+certificate for it automatically, given an `A` record pointing at the droplet and ports 80 and
+443 open.
 
-The resolution requires no registrar: a wildcard-DNS service maps the droplet IP to a real
-hostname (`<ip>.sslip.io` resolves to `<ip>`), and Let's Encrypt issues an ordinary trusted
-certificate for it. Caddy performs issuance and renewal automatically. If Let's Encrypt is
-rate-limiting that shared suffix at deploy time, the fallback is a Cloudflare Tunnel, which
-also provides an HTTPS hostname at no cost.
+TLS is not optional here: without it, passwords, session cookies, TOTP codes and withdrawal
+addresses travel in cleartext and `Secure` cookies cannot be used. For a platform holding
+customer funds that is not an acceptable launch state.
 
-The configuration is hostname-shaped either way, so pointing a purchased domain at it later
-is a single config change.
+> **Revision, 2026-07-25.** This section originally specified `<ip>.sslip.io` wildcard DNS with
+> a Cloudflare Tunnel fallback, because no domain had been purchased. `botsfight.com`
+> supersedes that workaround entirely; the configuration was always hostname-shaped, so this
+> is the single config change that was anticipated.
 
 ### Operational risks accepted
 
