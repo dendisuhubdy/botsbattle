@@ -1771,4 +1771,806 @@ git commit -m "feat: signer withdrawal broadcast and worker confirmation trackin
 git push origin main
 ```
 
-<!-- PLAN-CONTINUES -->
+---
+
+## Task 5: User API and withdrawal page
+
+**Files:**
+- Create: `src/app/api/me/totp/route.ts`, `src/app/api/me/totp/confirm/route.ts`
+- Create: `src/app/api/me/withdrawals/route.ts`, `src/app/api/me/withdrawals/[id]/cancel/route.ts`
+- Create: `src/app/withdraw/page.tsx`, `src/components/TotpEnrolment.tsx`, `src/components/WithdrawForm.tsx`
+- Modify: `src/components/Nav.tsx`, `src/lib/http/respond.ts`
+
+**Interfaces:**
+- Consumes: `beginEnrolment`, `confirmEnrolment`, `requestWithdrawal`, `cancelWithdrawal`, `listUserWithdrawals`, `requireUser`
+- Produces:
+
+| Method & path | Body | Success |
+|---|---|---|
+| `POST /api/me/totp` | — | `201 { uri, secret }` |
+| `POST /api/me/totp/confirm` | `{ code }` | `200 { enabled: true }` |
+| `GET /api/me/withdrawals` | — | `200 { withdrawals }` |
+| `POST /api/me/withdrawals` | `{ address, amount, totpCode }` | `201 { requestId }` |
+| `POST /api/me/withdrawals/:id/cancel` | — | `200 { ok: true }` |
+
+- [ ] **Step 1: Register the new error codes**
+
+In `src/lib/http/respond.ts`, add `TotpError` and `WithdrawalError` to the domain-error
+`instanceof` chain, and add to `STATUS_BY_CODE`:
+
+```ts
+  // totp
+  NOT_ENROLLED: 428,
+  ALREADY_ENROLLED: 409,
+  INVALID_CODE: 401,
+  NO_KEY: 500,
+  // withdrawals
+  BELOW_MINIMUM: 422,
+  INVALID_ADDRESS: 422,
+  LOCKED: 403,
+  NOT_REVIEWABLE: 409,
+  NOT_CANCELLABLE: 409,
+```
+
+`428 Precondition Required` is the useful signal for `NOT_ENROLLED`: it tells the client to
+send the user through enrolment rather than treating it as a plain authentication failure.
+
+- [ ] **Step 2: Write the TOTP routes**
+
+`src/app/api/me/totp/route.ts`:
+
+```ts
+import { getDb } from '@/lib/db/client'
+import { beginEnrolment } from '@/lib/auth/totp'
+import { handle, ok } from '@/lib/http/respond'
+import { requireUser } from '@/lib/http/auth'
+
+export async function POST(): Promise<Response> {
+  return handle(async () => {
+    const user = await requireUser()
+    const { secret, uri } = await beginEnrolment(getDb(), user.id)
+    return ok({ secret, uri }, { status: 201 })
+  })
+}
+```
+
+`src/app/api/me/totp/confirm/route.ts`:
+
+```ts
+import * as z from 'zod'
+import { getDb } from '@/lib/db/client'
+import { confirmEnrolment } from '@/lib/auth/totp'
+import { handle, ok } from '@/lib/http/respond'
+import { HttpError, requireUser } from '@/lib/http/auth'
+
+const Body = z.object({ code: z.string().regex(/^\d{6}$/) })
+
+export async function POST(request: Request): Promise<Response> {
+  return handle(async () => {
+    const user = await requireUser()
+    const parsed = Body.safeParse(await request.json())
+    if (!parsed.success) throw new HttpError(422, 'INVALID_BODY', 'code must be six digits')
+
+    await confirmEnrolment(getDb(), user.id, parsed.data.code)
+    return ok({ enabled: true })
+  })
+}
+```
+
+- [ ] **Step 3: Write the withdrawal routes**
+
+`src/app/api/me/withdrawals/route.ts`:
+
+```ts
+import * as z from 'zod'
+import { getDb } from '@/lib/db/client'
+import { parseUsdt } from '@/lib/money/units'
+import { requestWithdrawal, listUserWithdrawals } from '@/lib/withdrawals/request'
+import { handle, ok } from '@/lib/http/respond'
+import { HttpError, requireUser } from '@/lib/http/auth'
+
+export const dynamic = 'force-dynamic'
+
+const Body = z.object({
+  address: z.string().min(30).max(50),
+  amount: z.string(),
+  totpCode: z.string().regex(/^\d{6}$/),
+})
+
+export async function GET(): Promise<Response> {
+  return handle(async () => {
+    const user = await requireUser()
+    return ok({ withdrawals: await listUserWithdrawals(getDb(), user.id) })
+  })
+}
+
+export async function POST(request: Request): Promise<Response> {
+  return handle(async () => {
+    const user = await requireUser()
+    const parsed = Body.safeParse(await request.json())
+    if (!parsed.success) throw new HttpError(422, 'INVALID_BODY', parsed.error.issues[0].message)
+
+    let amountMicros: bigint
+    try {
+      amountMicros = parseUsdt(parsed.data.amount)
+    } catch {
+      throw new HttpError(422, 'INVALID_AMOUNT', `not a valid USDT amount: ${parsed.data.amount}`)
+    }
+
+    const result = await requestWithdrawal(getDb(), {
+      userId: user.id,
+      address: parsed.data.address,
+      amountMicros,
+      totpCode: parsed.data.totpCode,
+    })
+
+    return ok(result, { status: 201 })
+  })
+}
+```
+
+`src/app/api/me/withdrawals/[id]/cancel/route.ts`:
+
+```ts
+import { getDb } from '@/lib/db/client'
+import { cancelWithdrawal } from '@/lib/withdrawals/request'
+import { handle, ok } from '@/lib/http/respond'
+import { requireUser } from '@/lib/http/auth'
+
+export async function POST(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> },
+): Promise<Response> {
+  return handle(async () => {
+    const user = await requireUser()
+    const { id } = await params
+    await cancelWithdrawal(getDb(), { userId: user.id, requestId: id })
+    return ok({ ok: true })
+  })
+}
+```
+
+- [ ] **Step 4: Write the enrolment component**
+
+`src/components/TotpEnrolment.tsx`:
+
+```tsx
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { apiPost, ApiError } from '@/lib/client/api'
+
+export function TotpEnrolment() {
+  const router = useRouter()
+  const [enrolment, setEnrolment] = useState<{ uri: string; secret: string } | null>(null)
+  const [code, setCode] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function begin() {
+    setBusy(true)
+    setError(null)
+    try {
+      setEnrolment(await apiPost<{ uri: string; secret: string }>('/api/me/totp'))
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function confirm(event: React.FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await apiPost('/api/me/totp/confirm', { code })
+      router.refresh()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!enrolment) {
+    return (
+      <fieldset>
+        <legend>Two-factor authentication required</legend>
+        <p>Withdrawals are protected by an authenticator app. Set one up to continue.</p>
+        {error && <p className="error">{error}</p>}
+        <button onClick={begin} disabled={busy}>
+          {busy ? 'Starting…' : 'Set up two-factor authentication'}
+        </button>
+      </fieldset>
+    )
+  }
+
+  return (
+    <form onSubmit={confirm}>
+      <fieldset>
+        <legend>Finish setting up two-factor authentication</legend>
+        <p>Add this to your authenticator app, then enter the six-digit code it shows.</p>
+        <p>
+          Setup key: <code>{enrolment.secret}</code>
+        </p>
+        <p className="estimate">
+          Store this key somewhere safe. Losing it means losing the ability to withdraw.
+        </p>
+        <label>
+          Code
+          <input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" required />
+        </label>
+        {error && <p className="error">{error}</p>}
+        <button type="submit" disabled={busy}>
+          {busy ? 'Checking…' : 'Confirm'}
+        </button>
+      </fieldset>
+    </form>
+  )
+}
+```
+
+- [ ] **Step 5: Write the withdrawal form**
+
+`src/components/WithdrawForm.tsx`:
+
+```tsx
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { apiPost, ApiError } from '@/lib/client/api'
+import { formatUsdt } from '@/lib/money/units'
+
+export function WithdrawForm({
+  availableMicros,
+  minimumMicros,
+}: {
+  availableMicros: string
+  minimumMicros: string
+}) {
+  const router = useRouter()
+  const [address, setAddress] = useState('')
+  const [amount, setAmount] = useState('')
+  const [totpCode, setTotpCode] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    try {
+      await apiPost('/api/me/withdrawals', { address, amount, totpCode })
+      setMessage('Withdrawal requested. It will be reviewed before it is sent.')
+      setAmount('')
+      setTotpCode('')
+      router.refresh()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit}>
+      <fieldset>
+        <legend>Withdraw USDT</legend>
+        <p className="estimate">
+          Available: {formatUsdt(BigInt(availableMicros))} USDT · minimum{' '}
+          {formatUsdt(BigInt(minimumMicros))} USDT
+        </p>
+        <label>
+          Destination Tron address
+          <input value={address} onChange={(e) => setAddress(e.target.value)} required />
+        </label>
+        <p className="estimate">
+          USDT-TRC20 only. Check the address carefully — a sent withdrawal cannot be reversed.
+        </p>
+        <label>
+          Amount (USDT)
+          <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" required />
+        </label>
+        <label>
+          Authenticator code
+          <input value={totpCode} onChange={(e) => setTotpCode(e.target.value)} inputMode="numeric" required />
+        </label>
+        {error && <p className="error">{error}</p>}
+        {message && <p>{message}</p>}
+        <button type="submit" disabled={busy}>
+          {busy ? 'Requesting…' : 'Request withdrawal'}
+        </button>
+      </fieldset>
+    </form>
+  )
+}
+```
+
+- [ ] **Step 6: Write the page**
+
+`src/app/withdraw/page.tsx`:
+
+```tsx
+import { redirect } from 'next/navigation'
+import { eq } from 'drizzle-orm'
+import { getDb } from '@/lib/db/client'
+import { users } from '@/lib/db/schema'
+import { currentUser } from '@/lib/http/auth'
+import { userBalance } from '@/lib/ledger/accounts'
+import { listUserWithdrawals, MIN_WITHDRAWAL_MICROS } from '@/lib/withdrawals/request'
+import { TotpEnrolment } from '@/components/TotpEnrolment'
+import { WithdrawForm } from '@/components/WithdrawForm'
+import { Money } from '@/components/Money'
+
+export const dynamic = 'force-dynamic'
+
+export default async function WithdrawPage() {
+  const user = await currentUser()
+  if (!user) redirect('/login')
+
+  const db = getDb()
+  const [row] = await db
+    .select({ enabled: users.totpEnabled, locked: users.withdrawalLocked })
+    .from(users)
+    .where(eq(users.id, user.id))
+    .limit(1)
+
+  const [balance, withdrawals] = await Promise.all([
+    userBalance(db, user.id),
+    listUserWithdrawals(db, user.id),
+  ])
+
+  return (
+    <>
+      <h1>Withdraw</h1>
+
+      {row.locked ? (
+        <p className="error">
+          Withdrawals are currently locked on this account. Contact support.
+        </p>
+      ) : row.enabled ? (
+        <WithdrawForm
+          availableMicros={balance.toString()}
+          minimumMicros={MIN_WITHDRAWAL_MICROS.toString()}
+        />
+      ) : (
+        <TotpEnrolment />
+      )}
+
+      <h2>History</h2>
+      {withdrawals.length === 0 ? (
+        <p>No withdrawals yet.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Requested</th>
+              <th>Amount</th>
+              <th>Destination</th>
+              <th>Status</th>
+              <th>Transaction</th>
+            </tr>
+          </thead>
+          <tbody>
+            {withdrawals.map((w) => (
+              <tr key={w.id}>
+                <td>{w.requestedAt.toISOString().replace('T', ' ').slice(0, 16)}</td>
+                <td>
+                  <Money micros={w.amount} />
+                </td>
+                <td>
+                  <code>{w.address}</code>
+                </td>
+                <td>
+                  {w.status}
+                  {w.failureReason ? ` — ${w.failureReason}` : ''}
+                </td>
+                <td>{w.txHash ? <code>{w.txHash.slice(0, 16)}…</code> : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  )
+}
+```
+
+- [ ] **Step 7: Add the nav link**
+
+In `src/components/Nav.tsx`, in the signed-in branch after the Deposit link:
+
+```tsx
+          <Link href="/withdraw">Withdraw</Link>
+          {' · '}
+```
+
+- [ ] **Step 8: Verify**
+
+```bash
+pnpm typecheck
+pnpm build
+pnpm test
+```
+
+Expected: build lists `/withdraw`, `/api/me/totp`, `/api/me/withdrawals`; all tests pass.
+
+- [ ] **Step 9: Commit and push**
+
+```bash
+git add src/app/api/me src/app/withdraw src/components src/lib/http/respond.ts
+git commit -m "feat: TOTP enrolment and withdrawal request UI"
+git push origin main
+```
+
+---
+
+## Task 6: Admin withdrawal queue
+
+**Files:**
+- Create: `src/app/api/admin/withdrawals/route.ts`, `src/app/api/admin/withdrawals/[id]/approve/route.ts`, `src/app/api/admin/withdrawals/[id]/reject/route.ts`
+- Create: `src/app/admin/withdrawals/page.tsx`, `src/components/WithdrawalReviewControls.tsx`
+- Modify: `src/app/admin/page.tsx`
+
+**Interfaces:**
+- Consumes: `listPendingWithdrawals`, `approveWithdrawal`, `rejectWithdrawal`, `requireAdmin`
+- Produces:
+
+| Method & path | Body | Success |
+|---|---|---|
+| `GET /api/admin/withdrawals` | — | `200 { pending }` |
+| `POST /api/admin/withdrawals/:id/approve` | `{ note? }` | `200 { jobId }` |
+| `POST /api/admin/withdrawals/:id/reject` | `{ note }` | `200 { ok: true }` |
+
+- [ ] **Step 1: Write the routes**
+
+`src/app/api/admin/withdrawals/route.ts`:
+
+```ts
+import { getDb } from '@/lib/db/client'
+import { listPendingWithdrawals } from '@/lib/withdrawals/review'
+import { handle, ok } from '@/lib/http/respond'
+import { requireAdmin } from '@/lib/http/auth'
+
+export const dynamic = 'force-dynamic'
+
+export async function GET(): Promise<Response> {
+  return handle(async () => {
+    await requireAdmin()
+    return ok({ pending: await listPendingWithdrawals(getDb()) })
+  })
+}
+```
+
+`src/app/api/admin/withdrawals/[id]/approve/route.ts`:
+
+```ts
+import * as z from 'zod'
+import { getDb } from '@/lib/db/client'
+import { approveWithdrawal } from '@/lib/withdrawals/review'
+import { handle, ok } from '@/lib/http/respond'
+import { requireAdmin } from '@/lib/http/auth'
+
+const Body = z.object({ note: z.string().max(500).optional() })
+
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+): Promise<Response> {
+  return handle(async () => {
+    const admin = await requireAdmin()
+    const { id } = await params
+    const parsed = Body.safeParse(await request.json().catch(() => ({})))
+
+    const result = await approveWithdrawal(getDb(), {
+      requestId: id,
+      adminId: admin.id,
+      note: parsed.success ? parsed.data.note : undefined,
+    })
+    return ok(result)
+  })
+}
+```
+
+`src/app/api/admin/withdrawals/[id]/reject/route.ts`:
+
+```ts
+import * as z from 'zod'
+import { getDb } from '@/lib/db/client'
+import { rejectWithdrawal } from '@/lib/withdrawals/review'
+import { handle, ok } from '@/lib/http/respond'
+import { HttpError, requireAdmin } from '@/lib/http/auth'
+
+const Body = z.object({ note: z.string().min(1).max(500) })
+
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+): Promise<Response> {
+  return handle(async () => {
+    const admin = await requireAdmin()
+    const { id } = await params
+
+    const parsed = Body.safeParse(await request.json())
+    if (!parsed.success) throw new HttpError(422, 'INVALID_BODY', 'a rejection note is required')
+
+    await rejectWithdrawal(getDb(), { requestId: id, adminId: admin.id, note: parsed.data.note })
+    return ok({ ok: true })
+  })
+}
+```
+
+A rejection note is mandatory. The user sees their money come back with no explanation
+otherwise, and support has nothing to work from.
+
+- [ ] **Step 2: Write the review controls**
+
+`src/components/WithdrawalReviewControls.tsx`:
+
+```tsx
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { apiPost, ApiError } from '@/lib/client/api'
+
+export function WithdrawalReviewControls({
+  requestId,
+  address,
+  amountLabel,
+}: {
+  requestId: string
+  address: string
+  amountLabel: string
+}) {
+  const router = useRouter()
+  const [note, setNote] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const armed = confirm === 'SEND'
+
+  async function call(path: string, body?: unknown) {
+    setBusy(true)
+    setError(null)
+    try {
+      await apiPost(path, body)
+      setConfirm('')
+      setNote('')
+      router.refresh()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <fieldset>
+      <legend>
+        Review — {amountLabel} to <code>{address}</code>
+      </legend>
+      <label>
+        Note
+        <input value={note} onChange={(e) => setNote(e.target.value)} />
+      </label>
+      <label>
+        Type SEND to enable approval
+        <input value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+      </label>
+      <button
+        disabled={busy || !armed}
+        onClick={() => call(`/api/admin/withdrawals/${requestId}/approve`, { note: note || undefined })}
+      >
+        Approve and send
+      </button>{' '}
+      <button
+        disabled={busy || note.trim().length === 0}
+        onClick={() => call(`/api/admin/withdrawals/${requestId}/reject`, { note })}
+      >
+        Reject and refund
+      </button>
+      {error && <p className="error">{error}</p>}
+    </fieldset>
+  )
+}
+```
+
+- [ ] **Step 3: Write the admin page**
+
+`src/app/admin/withdrawals/page.tsx`:
+
+```tsx
+import { notFound } from 'next/navigation'
+import { getDb } from '@/lib/db/client'
+import { currentUser } from '@/lib/http/auth'
+import { listPendingWithdrawals } from '@/lib/withdrawals/review'
+import { WithdrawalReviewControls } from '@/components/WithdrawalReviewControls'
+import { formatUsdt } from '@/lib/money/units'
+
+export const dynamic = 'force-dynamic'
+
+export default async function AdminWithdrawalsPage() {
+  const user = await currentUser()
+  if (!user?.isAdmin) notFound()
+
+  const pending = await listPendingWithdrawals(getDb())
+
+  return (
+    <>
+      <h1>Withdrawal queue</h1>
+      {pending.length === 0 ? (
+        <p>Nothing awaiting review.</p>
+      ) : (
+        pending.map((w) => (
+          <div key={w.id}>
+            <p>
+              {w.email} · requested {w.requestedAt.toISOString().replace('T', ' ').slice(0, 16)}
+            </p>
+            <WithdrawalReviewControls
+              requestId={w.id}
+              address={w.address}
+              amountLabel={`${formatUsdt(w.amount)} USDT`}
+            />
+          </div>
+        ))
+      )}
+    </>
+  )
+}
+```
+
+- [ ] **Step 4: Link it from the admin page**
+
+In `src/app/admin/page.tsx`, immediately after the `<h1>Admin</h1>`:
+
+```tsx
+      <p>
+        <Link href="/admin/withdrawals">Withdrawal queue</Link>
+      </p>
+```
+
+- [ ] **Step 5: Verify**
+
+```bash
+pnpm typecheck
+pnpm build
+pnpm test
+```
+
+Expected: build lists `/admin/withdrawals` and the three admin withdrawal routes; all tests pass.
+
+- [ ] **Step 6: Commit and push**
+
+```bash
+git add src/app/api/admin/withdrawals src/app/admin src/components
+git commit -m "feat: admin withdrawal approval queue"
+git push origin main
+```
+
+---
+
+## Task 7: Live Nile withdrawal walkthrough
+
+**Files:**
+- Create: `docs/superpowers/plans/slice-3-walkthrough.md`
+
+Reuse the Nile wallet and configuration from Slice 2's walkthrough. The hot wallet needs both
+USDT (to send) and TRX (for energy).
+
+- [ ] **Step 1: Set the encryption key**
+
+```bash
+openssl rand -hex 32
+```
+
+Put it in `.env` as `TOTP_ENCRYPTION_KEY`. Confirm `.env` is still ignored:
+
+```bash
+git check-ignore -v .env
+```
+
+- [ ] **Step 2: Enrol in TOTP through the UI**
+
+Sign in, visit `/withdraw`, start enrolment, add the setup key to an authenticator app, and
+confirm. Record that the page then shows the withdrawal form.
+
+- [ ] **Step 3: Verify the guards before withdrawing anything**
+
+Record the observed response for each:
+
+1. Amount below the 10 USDT minimum → `BELOW_MINIMUM`
+2. A malformed destination address → `INVALID_ADDRESS`
+3. A wrong authenticator code → `INVALID_CODE`
+4. An amount above the balance → `INSUFFICIENT_FUNDS`
+
+- [ ] **Step 4: Request a withdrawal and confirm the ring-fence**
+
+Request a real withdrawal to a second Nile address you control. Immediately check that the
+available balance dropped and that the money is in pending:
+
+```bash
+docker compose exec -T db psql -U botsbattle -d botsbattle -c "
+  SELECT a.kind, SUM(le.amount) AS balance
+  FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
+  WHERE a.kind IN ('user_available','user_pending_withdrawal')
+  GROUP BY a.kind ORDER BY a.kind::text;"
+```
+
+Then confirm the ring-fence actually binds: with the withdrawal still pending, try to place a
+bet larger than the remaining available balance. It must be refused with `INSUFFICIENT_FUNDS`.
+This is the property the whole design exists for — record the observed error.
+
+- [ ] **Step 5: Approve it and watch the signer send**
+
+Approve from `/admin/withdrawals`, then run the signer in a shell with `TRON_MNEMONIC` set.
+Record the broadcast hash and verify on <https://nile.tronscan.org> that the USDT arrived at
+the destination.
+
+- [ ] **Step 6: Watch the worker confirm it**
+
+Run the worker and record the cycle at which the withdrawal moves to `CONFIRMED`. Then verify
+the ledger closed out correctly:
+
+```bash
+docker compose exec -T db psql -U botsbattle -d botsbattle -c "
+  SELECT COALESCE(SUM(amount),0) AS grand_total FROM ledger_entries;
+  SELECT tx_id FROM ledger_entries GROUP BY tx_id HAVING SUM(amount) <> 0;
+  SELECT kind, idempotency_key FROM ledger_transactions ORDER BY created_at;"
+```
+
+Expected: `grand_total` is `0`, no lopsided transactions, and the transaction log shows
+`WITHDRAWAL_REQUESTED` followed by `WITHDRAWAL_CONFIRMED` for this request.
+
+- [ ] **Step 7: Exercise the reject path**
+
+Request a second withdrawal, reject it with a note, and confirm the funds returned to
+available and the status reads `REJECTED` with the note visible to the user.
+
+- [ ] **Step 8: Reconcile**
+
+```bash
+pnpm reconcile
+```
+
+Expected: `balanced`. The withdrawn amount should have reduced both the on-chain total and the
+ledger custody figure by the same amount.
+
+- [ ] **Step 9: Write up the walkthrough**
+
+`docs/superpowers/plans/slice-3-walkthrough.md`, recording observed values as in the Slice 1
+and 2 walkthroughs: the guard responses, the ring-fence check, the broadcast hash, the
+confirmation cycle, the reject path, and the reconciliation output. **No mnemonic, no TOTP
+secret, and no encryption key in the document.**
+
+- [ ] **Step 10: Commit and push**
+
+```bash
+git add docs/superpowers/plans/slice-3-walkthrough.md
+git commit -m "docs: Slice 3 live Nile withdrawal walkthrough"
+git push origin main
+```
+
+---
+
+## Done when
+
+- `pnpm test` is green, including the concurrent-withdrawal test and every idempotency test
+- `pnpm typecheck` and `pnpm build` are clean
+- A real Nile withdrawal was requested, approved, broadcast, and confirmed, with the ledger
+  balanced at zero throughout
+- A pending withdrawal demonstrably blocked a bet that would have spent the same funds
+- A rejected withdrawal returned the money with a note the user can see
+- `pnpm reconcile` reports `balanced` after the withdrawal settled
+- No secret material is in the repository
+
+## Deliberately not in this slice
+
+`balance_cache` and its reconciliation job, KYC verification, geo-restriction, automated
+withdrawal approval, and deployment. Slice 4 covers deployment; the rest remain non-goals.
