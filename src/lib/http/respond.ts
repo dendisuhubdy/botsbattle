@@ -8,6 +8,8 @@ import { SettleError } from '@/lib/settlement/settle'
 import { SettlementMathError } from '@/lib/settlement/math'
 import { CreditError } from '@/lib/admin/credit'
 import { LedgerError } from '@/lib/ledger/post'
+import { TotpError } from '@/lib/auth/totp'
+import { WithdrawalError } from '@/lib/withdrawals/request'
 
 export function ok<T>(data: T, init?: ResponseInit): Response {
   return NextResponse.json({ data: jsonSafe(data) }, init)
@@ -42,6 +44,17 @@ const STATUS_BY_CODE: Record<string, number> = {
   NON_POSITIVE: 422,
   UNBALANCED: 500,
   EMPTY: 500,
+  // totp
+  NOT_ENROLLED: 428,
+  ALREADY_ENROLLED: 409,
+  INVALID_CODE: 401,
+  NO_KEY: 500,
+  // withdrawals
+  BELOW_MINIMUM: 422,
+  INVALID_ADDRESS: 422,
+  LOCKED: 403,
+  NOT_REVIEWABLE: 409,
+  NOT_CANCELLABLE: 409,
 }
 
 /** Single place where domain errors become HTTP status codes. */
@@ -58,7 +71,9 @@ export async function handle(fn: () => Promise<Response>): Promise<Response> {
       err instanceof SettleError ||
       err instanceof SettlementMathError ||
       err instanceof CreditError ||
-      err instanceof LedgerError
+      err instanceof LedgerError ||
+      err instanceof TotpError ||
+      err instanceof WithdrawalError
     ) {
       const status = STATUS_BY_CODE[err.code] ?? 400
       if (status >= 500) console.error('[api] domain failure', err)

@@ -16,6 +16,8 @@ export async function Nav() {
         <>
           <Link href="/deposit">Deposit</Link>
           {' · '}
+          <Link href="/withdraw">Withdraw</Link>
+          {' · '}
           <Link href="/account">Account</Link>
           {user.isAdmin && (
             <>
