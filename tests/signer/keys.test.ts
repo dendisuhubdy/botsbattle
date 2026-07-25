@@ -49,11 +49,11 @@ describe('signer keys', () => {
   })
 
   it('loadSignerSeed refuses to start without a mnemonic', () => {
-    expect(() => loadSignerSeed({} as NodeJS.ProcessEnv)).toThrow(/TRON_MNEMONIC/)
+    expect(() => loadSignerSeed({} as unknown as NodeJS.ProcessEnv)).toThrow(/TRON_MNEMONIC/)
   })
 
   it('loadSignerSeed accepts a valid mnemonic', () => {
-    const seed = loadSignerSeed({ TRON_MNEMONIC: MNEMONIC } as NodeJS.ProcessEnv)
+    const seed = loadSignerSeed({ TRON_MNEMONIC: MNEMONIC } as unknown as NodeJS.ProcessEnv)
     expect(Buffer.from(seed).toString('hex')).toBe(Buffer.from(SEED).toString('hex'))
   })
 
@@ -61,7 +61,7 @@ describe('signer keys', () => {
     expect(() =>
       loadSignerSeed({
         TRON_MNEMONIC: 'not actually a valid bip39 phrase at all',
-      } as NodeJS.ProcessEnv),
+      } as unknown as NodeJS.ProcessEnv),
     ).toThrow(/mnemonic/i)
   })
 })
