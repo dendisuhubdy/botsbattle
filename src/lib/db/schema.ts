@@ -207,3 +207,39 @@ export const chainCursors = pgTable('chain_cursors', {
   value: bigint('value', { mode: 'bigint' }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+export const withdrawalStatus = pgEnum('withdrawal_status', [
+  'REQUESTED',
+  'APPROVED',
+  'BROADCAST',
+  'CONFIRMED',
+  'REJECTED',
+  'CANCELLED',
+  'FAILED',
+])
+
+export const withdrawalRequests = pgTable(
+  'withdrawal_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    address: text('address').notNull(),
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    status: withdrawalStatus('status').notNull().default('REQUESTED'),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    reviewedBy: uuid('reviewed_by').references(() => users.id),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    reviewNote: text('review_note'),
+    signerJobId: uuid('signer_job_id').references(() => signerJobs.id),
+    txHash: text('tx_hash'),
+    broadcastAt: timestamp('broadcast_at', { withTimezone: true }),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    failureReason: text('failure_reason'),
+  },
+  (t) => [
+    index('withdrawals_status_idx').on(t.status, t.requestedAt),
+    index('withdrawals_user_idx').on(t.userId),
+  ],
+)
