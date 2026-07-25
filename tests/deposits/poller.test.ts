@@ -74,7 +74,7 @@ describe('pollDeposits', () => {
 
   it('scans every assigned address', async () => {
     const users = [await makeUser(db), await makeUser(db)]
-    const addresses = []
+    const addresses: string[] = []
     for (const u of users) {
       addresses.push((await assignDepositAddress(db, { userId: u, xpub: XPUB })).address)
     }
@@ -93,7 +93,7 @@ describe('pollDeposits', () => {
 
   it('keeps going when one address fails to read', async () => {
     const users = [await makeUser(db), await makeUser(db)]
-    const addresses = []
+    const addresses: string[] = []
     for (const u of users) {
       addresses.push((await assignDepositAddress(db, { userId: u, xpub: XPUB })).address)
     }
