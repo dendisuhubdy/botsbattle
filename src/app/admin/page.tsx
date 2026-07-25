@@ -26,6 +26,9 @@ export default async function AdminPage() {
   return (
     <>
       <h1>Admin</h1>
+      <p>
+        <Link href="/admin/withdrawals">Withdrawal queue</Link>
+      </p>
       <CreateFightForm />
       <CreditForm users={users.rows} />
 
