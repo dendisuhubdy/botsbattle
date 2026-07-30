@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:server": "tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json -f",
     "start": "next start",
     "db:up": "docker compose up -d db",
     "db:down": "docker compose down",
@@ -44,6 +45,7 @@
     "@types/react-dom": "^19.2.3",
     "dotenv": "^17.4.2",
     "fast-check": "^4.9.0",
+    "tsc-alias": "^1.9.1",
     "tsx": "^4.23.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"

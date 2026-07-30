@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["worker/**/*.ts", "signer/**/*.ts", "scripts/**/*.ts", "src/lib/**/*.ts"],
+  "exclude": ["node_modules", "tests"]
+}
