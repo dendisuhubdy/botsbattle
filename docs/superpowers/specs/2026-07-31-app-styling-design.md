@@ -140,11 +140,17 @@ logic, queries, validation, or request handlers. No component library dependency
 primitives are local CSS Modules. No dark/light toggle UI; the theme follows
 `prefers-color-scheme`.
 
-Deliberately excluded: a copy-to-clipboard button on the deposit address. It is an obvious
-improvement and worth doing, but it is *behaviour*, not presentation. Admitting it here would
-break the invariant the whole verification story rests on — that nothing but markup and
-styles changed, so the 223 existing tests are a sufficient regression net. It should be its
-own change, with its own test.
+Deliberately excluded: *adding* new behaviour to the deposit address, such as a
+copy-to-clipboard handler. Anything behavioural would break the invariant the whole
+verification story rests on — that nothing but markup and styles changed, so the 223 existing
+tests are a sufficient regression net.
+
+**Correction, 2026-07-31:** an earlier draft of this section claimed a copy-to-clipboard
+button did not exist and should not be added. That was wrong — `DepositAddressPanel.tsx` has
+shipped one since `d8c7478`
+(`<button onClick={() => navigator.clipboard.writeText(address)}>Copy</button>`). The claim
+was written without reading the file. Restyling that existing button is presentation and is
+in scope; the exclusion applies only to behaviour that is not already there.
 
 ## Verification
 
