@@ -512,3 +512,110 @@
 .finalCta .ctaRow {
   justify-content: center;
 }
+
+/* ---------- league dispatch (shown only when no fight is open) ---------- */
+
+.dispatch {
+  border: 1px solid var(--void-line);
+  border-left: 3px solid var(--hazard);
+  background: var(--void-raised);
+  padding: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.dispatchTitle {
+  font-size: clamp(1.3rem, 3.5vw, 1.9rem);
+  margin: 0.2rem 0 0.6rem;
+}
+
+.dispatchLede {
+  color: var(--ink-dim);
+  max-width: 60ch;
+  margin: 0 0 1.25rem;
+  line-height: 1.6;
+}
+
+.dispatchFacts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1rem;
+  margin: 0 0 1.5rem;
+}
+
+.dispatchFacts dt {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-dim);
+  margin-bottom: 0.3rem;
+}
+
+.dispatchFacts dd {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.timeline {
+  list-style: none;
+  margin: 0 0 1.25rem;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.phase,
+.phaseNow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.9rem;
+  padding: 0.7rem 0.9rem;
+  border-left: 2px solid var(--void-line);
+  background: var(--void);
+}
+
+.phaseNow {
+  border-left-color: var(--hazard);
+}
+
+.phaseLabel {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.phaseWhen {
+  color: var(--ink-dim);
+  font-size: 0.9rem;
+}
+
+.phaseBadge {
+  margin-left: auto;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.2rem 0.5rem;
+  background: var(--hazard);
+  color: var(--hazard-ink);
+}
+
+.dispatchNote {
+  color: var(--ink-dim);
+  max-width: 60ch;
+  margin: 0 0 1.25rem;
+  line-height: 1.6;
+}
+
+.disclaimer {
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  border-top: 1px solid var(--void-line);
+  padding-top: 0.9rem;
+  margin: 0;
+}
+
+.disclaimer a {
+  color: var(--hazard);
+  text-decoration: underline;
+}

@@ -8,6 +8,117 @@ import styles from './page.module.css'
 
 export const dynamic = 'force-dynamic'
 
+/*
+ * Reporting on a real league, on a site that takes bets on a different thing.
+ *
+ * Every figure below is corroborated across Global Times, Interesting Engineering and
+ * Wikipedia; anything only one source carried was left out. `AS_OF` is rendered on the page
+ * because these facts go stale — the round advances in September and the final moves to
+ * Dubai. An undated stale claim reads as a false one. Update AS_OF whenever you touch the
+ * figures, and re-check the sources at the foot of the block.
+ *
+ * The affiliation disclaimer is not decorative. Naming a real league and its manufacturer on
+ * a gambling site otherwise implies a commercial relationship that does not exist. Do not
+ * remove it, and do not add league logos or marks.
+ */
+const AS_OF = '31 July 2026'
+
+const URKL_PHASES = [
+  { label: 'Opening rounds', when: 'July – August 2026', start: '2026-07-01', end: '2026-09-01' },
+  { label: 'Later rounds', when: 'September – October 2026', start: '2026-09-01', end: '2026-11-01' },
+  { label: 'Grand final, Dubai', when: 'Late December 2026', start: '2026-11-01', end: '2027-02-01' },
+] as const
+
+/** Which phase today falls in, so the page stops claiming a round is running once it isn't. */
+function currentPhaseIndex(now: Date): number {
+  const iso = now.toISOString().slice(0, 10)
+  return URKL_PHASES.findIndex((p) => iso >= p.start && iso < p.end)
+}
+
+function LeagueDispatch() {
+  const active = currentPhaseIndex(new Date())
+
+  return (
+    <aside className={styles.dispatch} aria-labelledby="league-heading">
+      <p className={styles.kicker}>Elsewhere in the sport</p>
+      <h3 id="league-heading" className={styles.dispatchTitle}>
+        Ultimate Robot Knock-out Legend
+      </h3>
+      <p className={styles.dispatchLede}>
+        The first professional league for full-sized humanoid combat robots launched in Shenzhen
+        on 9 February 2026. Every team fights the same machine — an EngineAI T800 — so what is
+        actually being tested is the control software, not the hardware budget.
+      </p>
+
+      <dl className={styles.dispatchFacts}>
+        <div>
+          <dt>Host city</dt>
+          <dd>Shenzhen, China</dd>
+        </div>
+        <div>
+          <dt>Organiser</dt>
+          <dd>EngineAI</dd>
+        </div>
+        <div>
+          <dt>Field</dt>
+          <dd>
+            <span className={styles.mono}>200</span> teams from{' '}
+            <span className={styles.mono}>10</span> countries, cut to{' '}
+            <span className={styles.mono}>32</span>
+          </dd>
+        </div>
+        <div>
+          <dt>Prize pool</dt>
+          <dd>
+            <span className={styles.mono}>¥10,000,000</span> (about{' '}
+            <span className={styles.mono}>US$1.4m</span>), and a ten-kilogram gold belt
+          </dd>
+        </div>
+      </dl>
+
+      <ol className={styles.timeline}>
+        {URKL_PHASES.map((phase, i) => (
+          <li
+            key={phase.label}
+            className={i === active ? styles.phaseNow : styles.phase}
+            aria-current={i === active ? 'step' : undefined}
+          >
+            <span className={styles.phaseLabel}>{phase.label}</span>
+            <span className={styles.phaseWhen}>{phase.when}</span>
+            {i === active && <span className={styles.phaseBadge}>Running now</span>}
+          </li>
+        ))}
+      </ol>
+
+      <p className={styles.dispatchNote}>
+        Bouts are not scored on knockouts alone — judging covers motion control, dynamic balance
+        and impact resistance.
+      </p>
+
+      <p className={styles.disclaimer}>
+        Reported as of {AS_OF}. botsfight.com is not affiliated with, endorsed by, or an official
+        betting partner of the Ultimate Robot Knock-out Legend, EngineAI or Quanmingxing
+        Robotics. No URKL bout is available to bet on here. Sources:{' '}
+        <a href="https://www.globaltimes.cn/page/202602/1355090.shtml" rel="nofollow noopener">
+          Global Times
+        </a>
+        ,{' '}
+        <a
+          href="https://interestingengineering.com/ai-robotics/china-worlds-first-humanoid-robot-combat-league"
+          rel="nofollow noopener"
+        >
+          Interesting Engineering
+        </a>
+        ,{' '}
+        <a href="https://en.wikipedia.org/wiki/Ultimate_Robot_Knock-out_Legend" rel="nofollow noopener">
+          Wikipedia
+        </a>
+        .
+      </p>
+    </aside>
+  )
+}
+
 function ArenaMark() {
   return (
     <svg
@@ -125,16 +236,19 @@ export default async function LandingPage() {
         </div>
 
         {featured.length === 0 ? (
-          <div className={styles.emptyState}>
-            <p>
-              <strong>No fights are open right now.</strong> New cards are scheduled regularly —
-              check{' '}
-              <Link href="/fights" className={styles.mono}>
-                /fights
-              </Link>{' '}
-              shortly, or create an account so you&apos;re ready to bet the moment one opens.
-            </p>
-          </div>
+          <>
+            <div className={styles.emptyState}>
+              <p>
+                <strong>No fights are open right now.</strong> Nothing on this page can be bet on
+                yet. Create an account so you&apos;re ready the moment a card opens, or watch{' '}
+                <Link href="/fights" className={styles.mono}>
+                  /fights
+                </Link>
+                .
+              </p>
+            </div>
+            <LeagueDispatch />
+          </>
         ) : (
           <div className={styles.fightGrid}>
             {featured.map(({ fight, totals, estimated }) => (
