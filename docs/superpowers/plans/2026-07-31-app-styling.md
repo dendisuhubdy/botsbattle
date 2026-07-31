@@ -20,7 +20,7 @@
 - **All token pairs meet WCAG AA (4.5:1) for body text in both themes.**
 - **No new runtime dependencies.** Primitives are local CSS Modules.
 - **Dark token values are byte-identical to the current `.landing` values.** The landing page must be visually unchanged.
-- Docker Desktop does not start on the dev machine. Builds and the full test run happen on the droplet (`deploy@165.245.185.0`), as in Slice 4.
+- **The test suite runs locally.** Docker is running on the dev machine this session, so `npm run db:up && npm run db:migrate` brings up the dev Postgres on port 5434 and `npx vitest run` gives 223 passing. Verified before Task 1. If the database is not up, 20 test files fail with `ECONNREFUSED 127.0.0.1:5434` — that is a missing database, not a regression. Only the production image build and deploy (Task 10) need the droplet.
 
 ---
 
@@ -83,6 +83,29 @@ export function readCustomProperties(css: string, selector: string): Record<stri
   return out
 }
 
+/**
+ * Body of the first `@media <query>` block, brace-balanced.
+ *
+ * A media query wraps its rules in their own braces, so the naive `[^}]*` match
+ * above stops at the first inner `}` and returns nothing useful. Nested blocks
+ * need real brace counting.
+ */
+export function readMediaBlock(css: string, query: string): string {
+  const start = css.indexOf(`@media ${query}`)
+  if (start === -1) return ''
+  const open = css.indexOf('{', start)
+  if (open === -1) return ''
+  let depth = 0
+  for (let i = open; i < css.length; i++) {
+    if (css[i] === '{') depth += 1
+    else if (css[i] === '}') {
+      depth -= 1
+      if (depth === 0) return css.slice(open + 1, i)
+    }
+  }
+  return ''
+}
+
 function channel(value: number): number {
   const c = value / 255
   return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
@@ -111,7 +134,7 @@ Create `tests/styles/tokens.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
-import { contrastRatio, readCss, readCustomProperties } from './helpers/css'
+import { contrastRatio, readCss, readCustomProperties, readMediaBlock } from './helpers/css'
 
 const TOKENS = [
   '--ink', '--ink-dim', '--void', '--void-raised', '--void-line',
@@ -121,14 +144,18 @@ const TOKENS = [
 const globals = readCss('src/app/globals.css')
 const landing = readCss('src/app/page.module.css')
 
+const darkTokens = () => readCustomProperties(globals, ':root')
+const lightTokens = () =>
+  readCustomProperties(readMediaBlock(globals, '(prefers-color-scheme: light)'), ':root')
+
 describe('design tokens', () => {
   it('declares every token at :root', () => {
-    const root = readCustomProperties(globals, ':root')
+    const root = darkTokens()
     for (const token of TOKENS) expect(root, token).toHaveProperty(token)
   })
 
   it('keeps the dark values byte-identical to the landing page originals', () => {
-    const root = readCustomProperties(globals, ':root')
+    const root = darkTokens()
     expect(root['--void']).toBe('#0a0a0d')
     expect(root['--ink']).toBe('#f3efe6')
     expect(root['--hazard']).toBe('#f4c518')
@@ -141,8 +168,12 @@ describe('design tokens', () => {
   })
 
   it('declares a light variant for every token', () => {
-    const light = readCustomProperties(globals, '@media (prefers-color-scheme: light) :root')
+    const light = lightTokens()
     for (const token of TOKENS) expect(light, token).toHaveProperty(token)
+  })
+
+  it('gives light its own values rather than reusing the dark ones', () => {
+    expect(lightTokens()['--hazard']).not.toBe(darkTokens()['--hazard'])
   })
 })
 
@@ -157,8 +188,8 @@ describe('contrast', () => {
   ]
 
   it.each(['dark', 'light'])('meets AA in the %s theme', (theme) => {
-    const selector = theme === 'dark' ? ':root' : '@media (prefers-color-scheme: light) :root'
-    const t = readCustomProperties(globals, selector)
+    const t = theme === 'dark' ? darkTokens() : lightTokens()
+    expect(Object.keys(t).length, `${theme} tokens were not found`).toBeGreaterThan(0)
     for (const [fg, bg] of pairs) {
       expect(contrastRatio(t[fg], t[bg]), `${fg} on ${bg} (${theme})`).toBeGreaterThanOrEqual(4.5)
     }
@@ -166,7 +197,7 @@ describe('contrast', () => {
 })
 ```
 
-Note the light-theme selector is matched as the literal string `@media (prefers-color-scheme: light) :root`. Step 4 writes the CSS in exactly that form so the naive parser finds it; do not reformat it onto multiple lines.
+The light tokens are read via `readMediaBlock`, which brace-balances the `@media` wrapper. The dark tokens come from the first top-level `:root`. Both `:root` blocks may therefore coexist in the file without the test confusing one for the other.
 
 - [ ] **Step 3: Run the test to verify it fails**
 
@@ -193,19 +224,23 @@ In `src/app/globals.css`, replace the first line (`:root { color-scheme: light d
   --ok: #4fd67a;
 }
 
-@media (prefers-color-scheme: light) :root {
-  --ink: #14140f;
-  --ink-dim: #55524a;
-  --void: #f7f4ec;
-  --void-raised: #ffffff;
-  --void-line: #ddd8cb;
-  --hazard: #8a6a00;
-  --hazard-ink: #fffaf0;
-  --danger: #b3261e;
-  --danger-panel: #fbeae8;
-  --ok: #157f3c;
+@media (prefers-color-scheme: light) {
+  :root {
+    --ink: #14140f;
+    --ink-dim: #55524a;
+    --void: #f7f4ec;
+    --void-raised: #ffffff;
+    --void-line: #ddd8cb;
+    --hazard: #8a6a00;
+    --hazard-ink: #fffaf0;
+    --danger: #b3261e;
+    --danger-panel: #fbeae8;
+    --ok: #157f3c;
+  }
 }
 ```
+
+The media query wraps `:root` in its own braces. `@media (prefers-color-scheme: light) :root { … }` is **invalid CSS** — a parser rejects it with an unexpected-token error — so do not flatten it.
 
 The light values are not inversions. `--hazard: #f4c518` scores 12.1:1 on `--void` but only 1.6:1 on white, so light gets a darkened amber (`#8a6a00`, 4.6:1 on `#f7f4ec`). Likewise `--ok` and `--danger` are darkened. `--hazard-ink` and `--danger-panel` flip role: on light they are the pale surface behind hazard/danger text rather than a near-black one.
 
@@ -259,36 +294,48 @@ import { readCss } from './helpers/css'
 
 const globals = readCss('src/app/globals.css')
 
-/** Declaration blocks whose selector list matches `predicate`. */
-function blocksFor(css: string, predicate: (selector: string) => boolean): string[] {
-  return [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
-    .filter(([, selector]) => predicate(selector.trim()))
-    .map(([, , body]) => body)
+/**
+ * Selectors of every rule containing a declaration matching `declaration`.
+ *
+ * Walks back from each match to the `{` that opens its block, then to the
+ * previous brace, so nested `@media` wrappers do not corrupt the selector.
+ */
+function selectorsDeclaring(css: string, declaration: RegExp): string[] {
+  const out: string[] = []
+  for (const match of css.matchAll(new RegExp(declaration.source, 'g'))) {
+    const before = css.slice(0, match.index)
+    const open = before.lastIndexOf('{')
+    if (open === -1) continue
+    const prev = Math.max(before.lastIndexOf('{', open - 1), before.lastIndexOf('}', open))
+    out.push(before.slice(prev + 1, open).trim())
+  }
+  return out
 }
 
+const UPPERCASE = /text-transform\s*:\s*uppercase/
+const ALLOWED_UPPERCASE = /^(h1|h2|h3|legend)(\s*,\s*(h1|h2|h3|legend))*$/
+
 describe('legibility guardrails', () => {
-  it('never uppercases monospace text', () => {
-    for (const body of blocksFor(globals, (s) => s.includes('.mono'))) {
-      expect(body).not.toMatch(/text-transform\s*:\s*uppercase/)
-      expect(body).not.toMatch(/letter-spacing\s*:\s*(?!normal)/)
+  it('only uppercases headings and legends', () => {
+    const selectors = selectorsDeclaring(globals, UPPERCASE)
+    expect(selectors.length, 'expected at least one uppercase rule').toBeGreaterThan(0)
+    for (const selector of selectors) {
+      expect(selector, `"${selector}" must not uppercase non-heading text`).toMatch(ALLOWED_UPPERCASE)
     }
   })
 
-  it('only uppercases headings', () => {
-    const offenders = blocksFor(globals, () => true)
-      .filter((body) => /text-transform\s*:\s*uppercase/.test(body))
-    const selectors = [...globals.matchAll(/([^{}]+)\{([^}]*)\}/g)]
-      .filter(([, , body]) => /text-transform\s*:\s*uppercase/.test(body))
-      .map(([, selector]) => selector.trim())
-    expect(offenders.length).toBe(selectors.length)
-    for (const selector of selectors) {
-      expect(selector, `${selector} must not uppercase non-heading text`).toMatch(/h1|h2|h3|legend|\.kicker|\.statLabel/)
+  it('never uppercases or tracks out monospace text', () => {
+    for (const selector of selectorsDeclaring(globals, UPPERCASE)) {
+      expect(selector).not.toContain('.mono')
+    }
+    for (const selector of selectorsDeclaring(globals, /letter-spacing\s*:/)) {
+      expect(selector).not.toContain('.mono')
     }
   })
 
   it('renders monospace text with tabular numerals', () => {
-    const mono = blocksFor(globals, (s) => s.trim() === '.mono').join('')
-    expect(mono).toMatch(/font-variant-numeric\s*:\s*tabular-nums/)
+    const mono = selectorsDeclaring(globals, /font-variant-numeric\s*:\s*tabular-nums/)
+    expect(mono).toContain('.mono')
   })
 
   it('keeps a visible focus ring', () => {
