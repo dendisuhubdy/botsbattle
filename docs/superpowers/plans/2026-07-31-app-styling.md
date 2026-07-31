@@ -19,7 +19,8 @@
 - **`prefers-reduced-motion: reduce` disables all animation**, including the landing's existing `.liveDot` pulse.
 - **All token pairs meet WCAG AA (4.5:1) for body text in both themes.**
 - **No new runtime dependencies.** Primitives are local CSS Modules.
-- **Dark token values are byte-identical to the current `.landing` values.** The landing page must be visually unchanged.
+- **Dark token values are byte-identical to the current `.landing` values.** The landing page is therefore unchanged *in dark mode*.
+- **The landing page now follows the OS theme.** It previously hard-coded the dark tokens on `.landing` and rendered dark everywhere; inheriting from `:root` means a light-mode visitor now sees it light. This was ruled intended on 2026-07-31 after the consequence was raised explicitly. Consequence to carry forward: the landing's hazard-tape and "void" art direction was designed against near-black and has never been seen light, so Task 10's visual pass must include `/` in light mode and treat it as unreviewed design rather than a known-good page.
 - **The test suite runs locally.** Docker is running on the dev machine this session, so `npm run db:up && npm run db:migrate` brings up the dev Postgres on port 5434 and `npx vitest run` gives 223 passing. Verified before Task 1. If the database is not up, 20 test files fail with `ECONNREFUSED 127.0.0.1:5434` — that is a missing database, not a regression. Only the production image build and deploy (Task 10) need the droplet.
 
 ---
@@ -252,7 +253,7 @@ Every pair above was computed against the AA floor before this plan was written.
 | `--ok` on `--void` (light) | 4.62:1 |
 | `--hazard` on `--void` (light) | 4.61:1 |
 
-The remaining nine sit between 7:1 and 18.5:1.
+The remaining nine sit between 5.9:1 and 18.5:1 — the lowest of them being light `--danger` on `--void` at 5.95:1.
 
 In `src/app/page.module.css`, delete the ten custom-property declarations from the `.landing` block (lines 8–17), keeping every other declaration in that block. Update the comment above it to say the tokens now live in `globals.css`.
 
