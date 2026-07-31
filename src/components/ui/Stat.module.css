@@ -1,0 +1,22 @@
+.stat {
+  background: var(--void-raised);
+  border: 1px solid var(--void-line);
+  padding: 1rem 1.1rem;
+}
+
+.label {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  margin-bottom: 0.35rem;
+}
+
+.value {
+  display: block;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(1.25rem, 3vw, 1.75rem);
+  color: var(--ink);
+}

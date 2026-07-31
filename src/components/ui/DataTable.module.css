@@ -1,0 +1,4 @@
+.wrap { overflow-x: auto; }
+
+.table { width: 100%; border-collapse: collapse; }
+.table tbody tr:hover { background: var(--void-raised); }
