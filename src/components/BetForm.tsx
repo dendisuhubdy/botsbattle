@@ -99,7 +99,7 @@ export function BetForm({ fightId, initial }: { fightId: string; initial: FightV
             </label>
             <label>
               Stake (USDT, minimum 1)
-              <input value={stake} onChange={(e) => setStake(e.target.value)} inputMode="decimal" />
+              <input className="mono" value={stake} onChange={(e) => setStake(e.target.value)} inputMode="decimal" />
             </label>
             <p className="estimate">
               At the current pool that would return about{' '}

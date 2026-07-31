@@ -1,7 +1,26 @@
 import { describe, expect, it } from 'vitest'
+import { readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { readCss } from './helpers/css'
 
 const globals = readCss('src/app/globals.css')
+
+/** Every `*.module.css` file under `src/`, relative to the repo root. */
+function findModuleCssFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry)
+    if (statSync(full).isDirectory()) {
+      out.push(...findModuleCssFiles(full))
+    } else if (entry.endsWith('.module.css')) {
+      out.push(full)
+    }
+  }
+  return out
+}
+
+const moduleCssPaths = findModuleCssFiles('src').map((p) => p.replace(/\\/g, '/'))
+const moduleCssFiles = moduleCssPaths.map((path) => ({ path, css: readCss(path) }))
 
 /**
  * Selectors of every rule containing a declaration matching `declaration`.
@@ -39,6 +58,22 @@ describe('legibility guardrails', () => {
     }
     for (const selector of selectorsDeclaring(globals, /letter-spacing\s*:/)) {
       expect(selector).not.toContain('.mono')
+    }
+  })
+
+  it('found at least one component stylesheet to scan', () => {
+    // Guards against the glob silently matching nothing (e.g. a renamed src/ dir).
+    expect(moduleCssPaths.length).toBeGreaterThan(0)
+  })
+
+  it('never uppercases or tracks out monospace text in any *.module.css', () => {
+    for (const { path, css } of moduleCssFiles) {
+      for (const selector of selectorsDeclaring(css, UPPERCASE)) {
+        expect(selector, `${path}: "${selector}" must not uppercase .mono text`).not.toContain('.mono')
+      }
+      for (const selector of selectorsDeclaring(css, /letter-spacing\s*:/)) {
+        expect(selector, `${path}: "${selector}" must not track out .mono text`).not.toContain('.mono')
+      }
     }
   })
 

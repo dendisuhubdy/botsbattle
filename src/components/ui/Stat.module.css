@@ -2,6 +2,8 @@
   background: var(--void-raised);
   border: 1px solid var(--void-line);
   padding: 1rem 1.1rem;
+  margin: 0 0 0.75rem;
+  min-width: 0;
 }
 
 .label {
@@ -19,4 +21,5 @@
   font-variant-numeric: tabular-nums;
   font-size: clamp(1.25rem, 3vw, 1.75rem);
   color: var(--ink);
+  overflow-wrap: anywhere;
 }

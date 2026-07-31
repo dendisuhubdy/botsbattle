@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { getDb } from '@/lib/db/client'
 import { listFights, lockDueFights, poolTotals, estimatedPayoutPerUsdt } from '@/lib/fights/repo'
-import { Money } from '@/components/Money'
+import { Money, Multiplier } from '@/components/Money'
 import { EmptyState } from '@/components/ui'
 import styles from './fights.module.css'
 
@@ -27,7 +27,7 @@ export default async function FightsPage() {
         <EmptyState>No fights are open right now.</EmptyState>
       ) : (
         <div className={styles.fightGrid}>
-          {rows.map(({ fight, totals }) => (
+          {rows.map(({ fight, totals, estimated }) => (
             <Link key={fight.id} href={`/fights/${fight.id}`} className={styles.fightCard}>
               {fight.status === 'OPEN' && (
                 <span className={styles.liveBadge}>
@@ -56,6 +56,18 @@ export default async function FightsPage() {
                 <div>
                   <dt>Locks</dt>
                   <dd>{fight.lockAt.toISOString().replace('T', ' ').slice(0, 16)}</dd>
+                </div>
+                <div>
+                  <dt>Est. {fight.fighterA}</dt>
+                  <dd>
+                    <Multiplier micros={estimated.a} />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Est. {fight.fighterB}</dt>
+                  <dd>
+                    <Multiplier micros={estimated.b} />
+                  </dd>
                 </div>
               </dl>
             </Link>

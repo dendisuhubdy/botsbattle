@@ -40,7 +40,7 @@ export function DepositAddressPanel({ initialAddress }: { initialAddress: string
 
   return (
     <Panel title="Your deposit address">
-      {error && <p className="error">{error}</p>}
+      {error && <Callout tone="danger">{error}</Callout>}
       <Button type="button" onClick={reveal} disabled={busy}>
         {busy ? 'Generating…' : 'Show my deposit address'}
       </Button>

@@ -17,5 +17,10 @@
 .ghost { border-color: var(--void-line); color: var(--ink); }
 .ghost:hover:not(:disabled) { border-color: var(--hazard); }
 
-.danger { background: var(--danger); color: var(--ink); }
-.danger:hover:not(:disabled) { filter: brightness(1.1); }
+.danger {
+  background: transparent;
+  color: var(--danger);
+  border: 2px solid var(--danger);
+  font-weight: 700;
+}
+.danger:hover:not(:disabled) { background: var(--danger); color: var(--void); }

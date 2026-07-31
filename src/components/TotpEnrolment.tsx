@@ -64,7 +64,13 @@ export function TotpEnrolment() {
         </p>
         <label>
           Code
-          <input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" required />
+          <input
+            className="mono"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            inputMode="numeric"
+            required
+          />
         </label>
         {error && <Callout tone="danger">{error}</Callout>}
         <Button type="submit" disabled={busy}>

@@ -49,18 +49,30 @@ export function WithdrawForm({
         </p>
         <label>
           Destination Tron address
-          <input value={address} onChange={(e) => setAddress(e.target.value)} required />
+          <input className="mono" value={address} onChange={(e) => setAddress(e.target.value)} required />
         </label>
         <p className="estimate">
           USDT-TRC20 only. Check the address carefully — a sent withdrawal cannot be reversed.
         </p>
         <label>
           Amount (USDT)
-          <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" required />
+          <input
+            className="mono"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            inputMode="decimal"
+            required
+          />
         </label>
         <label>
           Authenticator code
-          <input value={totpCode} onChange={(e) => setTotpCode(e.target.value)} inputMode="numeric" required />
+          <input
+            className="mono"
+            value={totpCode}
+            onChange={(e) => setTotpCode(e.target.value)}
+            inputMode="numeric"
+            required
+          />
         </label>
         {error && <Callout tone="danger">{error}</Callout>}
         {message && <p>{message}</p>}

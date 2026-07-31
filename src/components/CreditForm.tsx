@@ -44,7 +44,7 @@ export function CreditForm({ users }: { users: { id: string; email: string }[] }
         </label>
         <label>
           Amount (USDT){' '}
-          <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
+          <input className="mono" value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
         </label>
         <label>
           Reference (unique; replaying it is a no-op)
