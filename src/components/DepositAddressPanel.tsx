@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { apiPost, ApiError } from '@/lib/client/api'
+import { Button, Callout, Panel } from '@/components/ui'
 
 export function DepositAddressPanel({ initialAddress }: { initialAddress: string | null }) {
   const [address, setAddress] = useState(initialAddress)
@@ -23,23 +24,26 @@ export function DepositAddressPanel({ initialAddress }: { initialAddress: string
 
   if (address) {
     return (
-      <fieldset>
-        <legend>Your deposit address</legend>
-        <p>
-          <code>{address}</code>
-        </p>
-        <button onClick={() => navigator.clipboard.writeText(address)}>Copy</button>
-      </fieldset>
+      <Panel title="Your deposit address">
+        <p className="mono depositAddress">{address}</p>
+        <Callout tone="info" title="Before you send">
+          USDT on the TRON network (TRC-20) only. Sending any other asset or using any
+          other network will lose the funds permanently. Deposits credit after the
+          required confirmations.
+        </Callout>
+        <Button type="button" variant="ghost" onClick={() => navigator.clipboard.writeText(address)}>
+          Copy
+        </Button>
+      </Panel>
     )
   }
 
   return (
-    <fieldset>
-      <legend>Your deposit address</legend>
+    <Panel title="Your deposit address">
       {error && <p className="error">{error}</p>}
-      <button onClick={reveal} disabled={busy}>
+      <Button type="button" onClick={reveal} disabled={busy}>
         {busy ? 'Generating…' : 'Show my deposit address'}
-      </button>
-    </fieldset>
+      </Button>
+    </Panel>
   )
 }

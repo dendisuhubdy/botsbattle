@@ -5,6 +5,7 @@ import { currentUser } from '@/lib/http/auth'
 import { userBalance } from '@/lib/ledger/accounts'
 import { listUserBets } from '@/lib/bets/place'
 import { Money } from '@/components/Money'
+import { DataTable, EmptyState, Panel, Stat } from '@/components/ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,25 +19,16 @@ export default async function AccountPage() {
   return (
     <>
       <h1>Account</h1>
-      <p>
-        Balance: <Money micros={balance} />
-      </p>
 
-      <h2>Bets</h2>
-      {bets.length === 0 ? (
-        <p>No bets yet.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Fight</th>
-              <th>Side</th>
-              <th>Stake</th>
-              <th>Status</th>
-              <th>Payout</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Stat label="Balance">
+        <Money micros={balance} />
+      </Stat>
+
+      <Panel title="Bets">
+        {bets.length === 0 ? (
+          <EmptyState>No bets yet.</EmptyState>
+        ) : (
+          <DataTable headers={['Fight', 'Side', 'Stake', 'Status', 'Payout']}>
             {bets.map((bet) => (
               <tr key={bet.id}>
                 <td>
@@ -57,9 +49,9 @@ export default async function AccountPage() {
                 </td>
               </tr>
             ))}
-          </tbody>
-        </table>
-      )}
+          </DataTable>
+        )}
+      </Panel>
     </>
   )
 }
