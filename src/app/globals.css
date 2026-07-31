@@ -1,4 +1,32 @@
-:root { color-scheme: light dark; }
+:root {
+  color-scheme: dark light;
+
+  --ink: #f3efe6;
+  --ink-dim: #b8b2a6;
+  --void: #0a0a0d;
+  --void-raised: #131316;
+  --void-line: #232327;
+  --hazard: #f4c518;
+  --hazard-ink: #1a1500;
+  --danger: #e2402c;
+  --danger-panel: #2a1310;
+  --ok: #4fd67a;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --ink: #14140f;
+    --ink-dim: #55524a;
+    --void: #f7f4ec;
+    --void-raised: #ffffff;
+    --void-line: #ddd8cb;
+    --hazard: #8a6a00;
+    --hazard-ink: #fffaf0;
+    --danger: #b3261e;
+    --danger-panel: #fbeae8;
+    --ok: #157f3c;
+  }
+}
 body { font-family: system-ui, sans-serif; margin: 0; padding: 1.5rem; max-width: 60rem; }
 a { color: inherit; }
 table { border-collapse: collapse; width: 100%; }
