@@ -6,6 +6,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 set -a; . ./.env.production; set +a
 
+# rclone is installed to ~/bin because the deploy user has no sudo. cron runs with
+# PATH=/usr/bin:/bin, so without this the upload silently falls through to the
+# "LOCAL ONLY" branch every night while the interactive test keeps passing.
+PATH="$HOME/bin:$PATH"
+
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 OUT_DIR=/home/deploy/backups
 OUT="$OUT_DIR/botsbattle-$STAMP.sql.gz"
