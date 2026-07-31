@@ -1,0 +1,21 @@
+.btn {
+  display: inline-block;
+  font-family: 'Arial Black', 'Helvetica Neue', system-ui, sans-serif;
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  padding: 0.7rem 1.2rem;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.primary { background: var(--hazard); color: var(--hazard-ink); }
+.primary:hover:not(:disabled) { filter: brightness(1.1); }
+
+.ghost { border-color: var(--void-line); color: var(--ink); }
+.ghost:hover:not(:disabled) { border-color: var(--hazard); }
+
+.danger { background: var(--danger); color: var(--ink); }
+.danger:hover:not(:disabled) { filter: brightness(1.1); }

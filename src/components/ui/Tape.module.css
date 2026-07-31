@@ -1,0 +1,10 @@
+.tape {
+  height: 0.6rem;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--hazard),
+    var(--hazard) 1.2rem,
+    var(--hazard-ink) 1.2rem,
+    var(--hazard-ink) 2.4rem
+  );
+}
