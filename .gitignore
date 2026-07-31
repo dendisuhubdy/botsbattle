@@ -1,6 +1,9 @@
 node_modules
 .next
 .env
+# `.env` does not glob; the production secrets file needs its own line. The `.example`
+# template is committed and must stay tracked.
+.env.production
 *.tsbuildinfo
 next-env.d.ts
 dist

@@ -1,7 +1,9 @@
 node_modules
 .next
 .git
-.env
+# Glob, not just `.env`: `.env.production` holds the mainnet seed and must never enter the
+# build context. Nothing in the build reads an env file -- there are no NEXT_PUBLIC_ vars.
+.env*
 dist
 docs
 tests

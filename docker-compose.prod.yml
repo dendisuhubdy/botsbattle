@@ -1,0 +1,94 @@
+name: botsbattle
+
+# Only `caddy` publishes ports. `db` and `signer` have no `ports` key at all, so they are
+# reachable only on the internal compose network -- the signer accepts no inbound
+# connections whatsoever.
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: botsbattle:latest
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+
+# The Tron settings web, worker, and signer all share. Spending material is NOT here.
+x-tron: &tron
+  TRON_NETWORK: ${TRON_NETWORK}
+  TRON_FULL_HOST: ${TRON_FULL_HOST}
+  TRONGRID_API_KEY: ${TRONGRID_API_KEY}
+  TRON_USDT_CONTRACT: ${TRON_USDT_CONTRACT}
+  TRON_HOT_WALLET_ADDRESS: ${TRON_HOT_WALLET_ADDRESS}
+  TRON_HOT_WALLET_INDEX: ${TRON_HOT_WALLET_INDEX:-0}
+  TRON_XPUB: ${TRON_XPUB}
+  TRON_CONFIRMATIONS: ${TRON_CONFIRMATIONS}
+  TRON_SWEEP_MIN_MICROS: ${TRON_SWEEP_MIN_MICROS}
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+  web:
+    <<: *app
+    command: ["node", "server.js"]
+    environment:
+      <<: *tron
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY}
+      # TRON_MNEMONIC is deliberately absent.
+
+  worker:
+    <<: *app
+    command: ["node", "dist/worker/main.js"]
+    environment:
+      <<: *tron
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      WORKER_INTERVAL_MS: ${WORKER_INTERVAL_MS:-15000}
+      # TRON_MNEMONIC is deliberately absent; worker/main.ts refuses to start if it is set.
+
+  signer:
+    <<: *app
+    command: ["node", "dist/signer/main.js"]
+    environment:
+      <<: *tron
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      SIGNER_INTERVAL_MS: ${SIGNER_INTERVAL_MS:-5000}
+      # The one container that holds spending material.
+      TRON_MNEMONIC: ${TRON_MNEMONIC}
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
