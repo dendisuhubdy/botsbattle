@@ -126,6 +126,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .estimate { color: var(--ink-dim); font-size: 0.9em; }
 
+.narrow { max-width: 26rem; margin: 3rem auto; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

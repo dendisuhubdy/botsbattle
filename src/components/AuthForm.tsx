@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiPost, ApiError } from '@/lib/client/api'
+import { Button, Callout } from '@/components/ui'
 
 export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
   const router = useRouter()
@@ -45,10 +46,10 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
           />
         </label>
         {mode === 'signup' && <p className="estimate">At least 10 characters.</p>}
-        {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={busy}>
+        {error && <Callout tone="danger">{error}</Callout>}
+        <Button type="submit" disabled={busy}>
           {busy ? 'Working…' : mode === 'login' ? 'Log in' : 'Create account'}
-        </button>
+        </Button>
       </fieldset>
     </form>
   )
