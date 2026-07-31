@@ -116,11 +116,45 @@ FAILED on purpose and needs code, not a retry.
 Set `users.withdrawal_locked` for the user. Withdrawal requests are refused while set;
 deposits and betting are unaffected.
 
+### Backups
+
+Nightly at 03:17 UTC via the `deploy` crontab, running `deploy/backup.sh`: `pg_dump`
+gzipped to `/home/deploy/backups`, kept 14 days locally, and uploaded to the DigitalOcean
+Space `botsfight-backups` (sgp1) through rclone.
+
+rclone lives in `~/bin` because `deploy` has no sudo, and `backup.sh` puts `~/bin` on PATH
+itself — cron runs with `PATH=/usr/bin:/bin` and would otherwise skip the upload silently.
+Credentials are in `~/.config/rclone/rclone.conf` (mode 600) using a Spaces key scoped to
+this account. The Space is private; anonymous listing and direct object reads both 403.
+
+Check backups are actually happening:
+
+```bash
+tail -20 ~/backup.log
+ls -la ~/backups/
+~/bin/rclone ls dospaces:botsfight-backups
+```
+
 ### Restoring from backup
 
-See `deploy/restore.sh`. It restores into a scratch database by default so a rehearsal
-cannot clobber production. Restoring over production requires typing the confirmation
-phrase `restore-production`.
+`deploy/restore.sh` restores into a scratch database by default so a rehearsal cannot
+clobber production. Restoring over production requires typing `restore-production`.
+
+It verifies the restored copy rather than trusting psql's exit code: double-entry means the
+whole ledger and every individual transaction must sum to zero, and it fails loudly
+otherwise. A restore that produces a corrupt ledger is not a successful restore.
+
+Restore from the off-site copy, which is the case that matters if the droplet is gone:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+LATEST=$(rclone lsf dospaces:botsfight-backups | sort | tail -1)
+rclone copy "dospaces:botsfight-backups/$LATEST" /tmp/offsite/
+cd ~/botsbattle && bash deploy/restore.sh "/tmp/offsite/$LATEST"
+```
+
+Rehearse this periodically. Note that while the ledger is empty, "sums to zero" is a weak
+assertion — repeat the rehearsal once there is real transaction volume.
 
 ## Production Docker image
 
