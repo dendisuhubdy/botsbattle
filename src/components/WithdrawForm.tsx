@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiPost, ApiError } from '@/lib/client/api'
 import { formatUsdt } from '@/lib/money/units'
+import { Button, Callout } from '@/components/ui'
 
 export function WithdrawForm({
   availableMicros,
@@ -43,8 +44,8 @@ export function WithdrawForm({
       <fieldset>
         <legend>Withdraw USDT</legend>
         <p className="estimate">
-          Available: {formatUsdt(BigInt(availableMicros))} USDT · minimum{' '}
-          {formatUsdt(BigInt(minimumMicros))} USDT
+          Available: <span className="mono">{formatUsdt(BigInt(availableMicros))} USDT</span> ·
+          minimum <span className="mono">{formatUsdt(BigInt(minimumMicros))} USDT</span>
         </p>
         <label>
           Destination Tron address
@@ -61,11 +62,11 @@ export function WithdrawForm({
           Authenticator code
           <input value={totpCode} onChange={(e) => setTotpCode(e.target.value)} inputMode="numeric" required />
         </label>
-        {error && <p className="error">{error}</p>}
+        {error && <Callout tone="danger">{error}</Callout>}
         {message && <p>{message}</p>}
-        <button type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy}>
           {busy ? 'Requesting…' : 'Request withdrawal'}
-        </button>
+        </Button>
       </fieldset>
     </form>
   )

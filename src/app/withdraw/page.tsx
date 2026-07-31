@@ -8,6 +8,7 @@ import { listUserWithdrawals, MIN_WITHDRAWAL_MICROS } from '@/lib/withdrawals/re
 import { TotpEnrolment } from '@/components/TotpEnrolment'
 import { WithdrawForm } from '@/components/WithdrawForm'
 import { Money } from '@/components/Money'
+import { Callout, DataTable, EmptyState, Panel, Stat } from '@/components/ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,34 +32,32 @@ export default async function WithdrawPage() {
     <>
       <h1>Withdraw</h1>
 
+      <Stat label="Available">
+        <Money micros={balance} />
+      </Stat>
+
       {row.locked ? (
-        <p className="error">
+        <Callout tone="danger" title="Withdrawals locked">
           Withdrawals are currently locked on this account. Contact support.
-        </p>
+        </Callout>
       ) : row.enabled ? (
-        <WithdrawForm
-          availableMicros={balance.toString()}
-          minimumMicros={MIN_WITHDRAWAL_MICROS.toString()}
-        />
+        <Panel title="Request a withdrawal">
+          <WithdrawForm
+            availableMicros={balance.toString()}
+            minimumMicros={MIN_WITHDRAWAL_MICROS.toString()}
+          />
+        </Panel>
       ) : (
-        <TotpEnrolment />
+        <Panel title="Two-factor required">
+          <TotpEnrolment />
+        </Panel>
       )}
 
-      <h2>History</h2>
-      {withdrawals.length === 0 ? (
-        <p>No withdrawals yet.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Requested</th>
-              <th>Amount</th>
-              <th>Destination</th>
-              <th>Status</th>
-              <th>Transaction</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Panel title="History">
+        {withdrawals.length === 0 ? (
+          <EmptyState>No withdrawals yet.</EmptyState>
+        ) : (
+          <DataTable headers={['Requested', 'Amount', 'Destination', 'Status', 'Transaction']}>
             {withdrawals.map((w) => (
               <tr key={w.id}>
                 <td>{w.requestedAt.toISOString().replace('T', ' ').slice(0, 16)}</td>
@@ -66,18 +65,18 @@ export default async function WithdrawPage() {
                   <Money micros={w.amount} />
                 </td>
                 <td>
-                  <code>{w.address}</code>
+                  <span className="mono">{w.address}</span>
                 </td>
                 <td>
                   {w.status}
                   {w.failureReason ? ` — ${w.failureReason}` : ''}
                 </td>
-                <td>{w.txHash ? <code>{w.txHash.slice(0, 16)}…</code> : '—'}</td>
+                <td>{w.txHash ? <span className="mono">{w.txHash.slice(0, 16)}…</span> : '—'}</td>
               </tr>
             ))}
-          </tbody>
-        </table>
-      )}
+          </DataTable>
+        )}
+      </Panel>
     </>
   )
 }
