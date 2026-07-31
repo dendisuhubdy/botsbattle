@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { apiGet, apiPost, ApiError } from '@/lib/client/api'
 import { formatUsdt } from '@/lib/money/units'
+import { Button, Callout } from '@/components/ui'
 
 export type FightView = {
   fight: { id: string; fighterA: string; fighterB: string; status: string; outcome: string | null }
@@ -104,11 +105,11 @@ export function BetForm({ fightId, initial }: { fightId: string; initial: FightV
               At the current pool that would return about{' '}
               {estimate ? `${formatUsdt(BigInt(estimate))}× your stake` : 'an unknown multiple'}.
             </p>
-            {error && <p className="error">{error}</p>}
+            {error && <Callout tone="danger">{error}</Callout>}
             {message && <p>{message}</p>}
-            <button type="submit" disabled={busy}>
+            <Button type="submit" disabled={busy}>
               {busy ? 'Placing…' : 'Place bet'}
-            </button>
+            </Button>
           </fieldset>
         </form>
       ) : (

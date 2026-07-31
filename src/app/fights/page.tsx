@@ -1,7 +1,9 @@
 import Link from 'next/link'
 import { getDb } from '@/lib/db/client'
 import { listFights, lockDueFights, poolTotals, estimatedPayoutPerUsdt } from '@/lib/fights/repo'
-import { Money, Multiplier } from '@/components/Money'
+import { Money } from '@/components/Money'
+import { EmptyState } from '@/components/ui'
+import styles from './fights.module.css'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,46 +19,45 @@ export default async function FightsPage() {
     }),
   )
 
-  if (!rows.length) return <p>No fights are open right now.</p>
-
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Fight</th>
-          <th>Status</th>
-          <th>Pool</th>
-          <th>Est. A</th>
-          <th>Est. B</th>
-          <th>Locks</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(({ fight, totals, estimated }) => (
-          <tr key={fight.id}>
-            <td>
-              <Link href={`/fights/${fight.id}`}>
-                {fight.fighterA} vs {fight.fighterB}
-              </Link>
-              <div className="estimate">{fight.leagueName}</div>
-            </td>
-            <td>
-              {fight.status}
-              {fight.outcome ? ` (${fight.outcome})` : ''}
-            </td>
-            <td>
-              <Money micros={totals.total} />
-            </td>
-            <td>
-              <Multiplier micros={estimated.a} />
-            </td>
-            <td>
-              <Multiplier micros={estimated.b} />
-            </td>
-            <td>{fight.lockAt.toISOString().replace('T', ' ').slice(0, 16)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <>
+      <h1>Fights</h1>
+
+      {rows.length === 0 ? (
+        <EmptyState>No fights are open right now.</EmptyState>
+      ) : (
+        <div className={styles.fightGrid}>
+          {rows.map(({ fight, totals }) => (
+            <Link key={fight.id} href={`/fights/${fight.id}`} className={styles.fightCard}>
+              {fight.status === 'OPEN' && (
+                <span className={styles.liveBadge}>
+                  <span className={styles.liveDot} aria-hidden="true" />
+                  Open
+                </span>
+              )}
+              <span className={styles.fightLeague}>{fight.leagueName}</span>
+              <h3 className={styles.fightNames}>
+                {fight.fighterA} <span aria-hidden="true">vs</span> {fight.fighterB}
+              </h3>
+              <dl className={styles.fightMeta}>
+                <div>
+                  <dt>Pool</dt>
+                  <dd>
+                    <Money micros={totals.total} />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Status</dt>
+                  <dd>
+                    {fight.status}
+                    {fight.outcome ? ` (${fight.outcome})` : ''}
+                  </dd>
+                </div>
+              </dl>
+            </Link>
+          ))}
+        </div>
+      )}
+    </>
   )
 }

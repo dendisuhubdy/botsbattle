@@ -1,0 +1,117 @@
+/*
+ * Fights list + fight detail styles. The fight-card rules below are ported
+ * verbatim from ../page.module.css (landing page), with the `.landing `
+ * ancestor prefix stripped — they already reference the global design
+ * tokens, so they work unmodified here. Left duplicated deliberately: the
+ * marketing page should not depend on this app stylesheet.
+ */
+
+.fightGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 1.25rem;
+}
+
+.fightCard {
+  position: relative;
+  background: var(--void-raised);
+  border: 1px solid var(--void-line);
+  padding: 1.25rem 1.25rem 1.4rem;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+.fightCard::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid transparent;
+  pointer-events: none;
+  transition: border-color 0.15s ease;
+}
+
+.fightCard:hover::before,
+.fightCard:focus-visible::before {
+  border-color: var(--hazard);
+}
+
+.fightLeague {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+}
+
+.liveBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ok);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  float: right;
+}
+
+.liveDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .liveDot {
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.fightNames {
+  font-family: 'Arial Black', 'Helvetica Neue', system-ui, sans-serif;
+  font-size: 1.25rem;
+  text-transform: uppercase;
+  margin: 0.6rem 0 1rem;
+  line-height: 1.15;
+}
+
+.fightMeta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  border-top: 1px dashed var(--void-line);
+  padding-top: 0.9rem;
+}
+
+.fightMeta dt {
+  color: var(--ink-dim);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fightMeta dd {
+  margin: 0.15rem 0 0;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+}
+
+/* ---------- fight detail page ---------- */
+
+.statRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 1rem 0 1.5rem;
+}

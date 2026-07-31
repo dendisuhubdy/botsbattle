@@ -10,6 +10,9 @@ import {
 } from '@/lib/fights/repo'
 import { BetForm, type FightView } from '@/components/BetForm'
 import { currentUser } from '@/lib/http/auth'
+import { Money, Multiplier } from '@/components/Money'
+import { Panel, Stat } from '@/components/ui'
+import styles from '../fights.module.css'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,6 +56,18 @@ export default async function FightPage({ params }: { params: Promise<{ id: stri
         {fight.leagueName} · rake {(fight.rakeBps / 100).toFixed(2)}%
       </p>
 
+      <div className={styles.statRow}>
+        <Stat label="Pool">
+          <Money micros={totals.total} />
+        </Stat>
+        <Stat label={`Est. ${fight.fighterA}`}>
+          <Multiplier micros={estimated.a} />
+        </Stat>
+        <Stat label={`Est. ${fight.fighterB}`}>
+          <Multiplier micros={estimated.b} />
+        </Stat>
+      </div>
+
       {fight.streamEmbedUrl && (
         <iframe
           src={fight.streamEmbedUrl}
@@ -63,13 +78,15 @@ export default async function FightPage({ params }: { params: Promise<{ id: stri
         />
       )}
 
-      {user ? (
-        <BetForm fightId={fight.id} initial={initial} />
-      ) : (
-        <p>
-          <Link href="/login">Log in</Link> to place a bet.
-        </p>
-      )}
+      <Panel title="Place a bet">
+        {user ? (
+          <BetForm fightId={fight.id} initial={initial} />
+        ) : (
+          <p>
+            <Link href="/login">Log in</Link> to place a bet.
+          </p>
+        )}
+      </Panel>
     </>
   )
 }
