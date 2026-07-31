@@ -18,7 +18,7 @@
 .ghost:hover:not(:disabled) { border-color: var(--hazard); }
 
 .danger {
-  background: transparent;
+  background: var(--void);
   color: var(--danger);
   border: 2px solid var(--danger);
   font-weight: 700;

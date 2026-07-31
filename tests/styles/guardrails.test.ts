@@ -23,6 +23,29 @@ const moduleCssPaths = findModuleCssFiles('src').map((p) => p.replace(/\\/g, '/'
 const moduleCssFiles = moduleCssPaths.map((path) => ({ path, css: readCss(path) }))
 
 /**
+ * Leaf rules (selector + declaration body) in `css` — i.e. rules with no
+ * nested braces of their own. This deliberately also matches simple rules
+ * nested inside `@media`/`@keyframes` wrappers (the wrapper's own "selector"
+ * fails to match because its body contains a further `{`), which is exactly
+ * the set of rules whose declarations are worth inspecting.
+ */
+function leafRules(css: string): { selector: string; body: string }[] {
+  const out: { selector: string; body: string }[] = []
+  for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    out.push({ selector: match[1].trim(), body: match[2] })
+  }
+  return out
+}
+
+/**
+ * CSS-module class names are local and arbitrary — a literal `.mono` substring
+ * check only catches rules that happen to keep that name (see globals.css).
+ * Module files must instead be matched structurally: any rule that sets a
+ * monospace `font-family`, regardless of what its selector is called.
+ */
+const MONO_FONT_FAMILY = /font-family\s*:[^;]*monospace/i
+
+/**
  * Selectors of every rule containing a declaration matching `declaration`.
  *
  * Walks back from each match to the `{` that opens its block, then to the
@@ -66,13 +89,24 @@ describe('legibility guardrails', () => {
     expect(moduleCssPaths.length).toBeGreaterThan(0)
   })
 
+  it('found at least one monospace rule to scan across *.module.css', () => {
+    // Guards against MONO_FONT_FAMILY silently matching nothing (e.g. a syntax change).
+    const found = moduleCssFiles.some(({ css }) => leafRules(css).some((r) => MONO_FONT_FAMILY.test(r.body)))
+    expect(found).toBe(true)
+  })
+
   it('never uppercases or tracks out monospace text in any *.module.css', () => {
     for (const { path, css } of moduleCssFiles) {
-      for (const selector of selectorsDeclaring(css, UPPERCASE)) {
-        expect(selector, `${path}: "${selector}" must not uppercase .mono text`).not.toContain('.mono')
-      }
-      for (const selector of selectorsDeclaring(css, /letter-spacing\s*:/)) {
-        expect(selector, `${path}: "${selector}" must not track out .mono text`).not.toContain('.mono')
+      for (const { selector, body } of leafRules(css)) {
+        if (!MONO_FONT_FAMILY.test(body)) continue
+        expect(
+          UPPERCASE.test(body),
+          `${path}: "${selector}" is monospace and must not declare text-transform: uppercase`,
+        ).toBe(false)
+        expect(
+          /letter-spacing\s*:/.test(body),
+          `${path}: "${selector}" is monospace and must not declare letter-spacing`,
+        ).toBe(false)
       }
     }
   })
