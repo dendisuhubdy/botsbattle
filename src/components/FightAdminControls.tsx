@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiPost, ApiError } from '@/lib/client/api'
+import { Button, Callout, Panel, Tape } from '@/components/ui'
 
 /**
  * Settlement asks for a typed confirmation because it is irreversible and moves real
@@ -47,9 +48,13 @@ export function FightAdminControls({
       <legend>Controls — fight is {status}</legend>
 
       {status === 'DRAFT' && (
-        <button disabled={busy} onClick={() => call(`/api/admin/fights/${fightId}/publish`)}>
+        <Button
+          type="button"
+          disabled={busy}
+          onClick={() => call(`/api/admin/fights/${fightId}/publish`)}
+        >
           Publish (open betting)
-        </button>
+        </Button>
       )}
 
       {(canSettle || canVoid) && (
@@ -59,35 +64,44 @@ export function FightAdminControls({
             <input value={confirm} onChange={(e) => setConfirm(e.target.value)} />
           </label>
 
-          {canSettle && (
-            <>
-              <button
-                disabled={busy || !armed}
-                onClick={() => call(`/api/admin/fights/${fightId}/settle`, { outcome: 'A' })}
-              >
-                {fighterA} (A) won
-              </button>{' '}
-              <button
-                disabled={busy || !armed}
-                onClick={() => call(`/api/admin/fights/${fightId}/settle`, { outcome: 'B' })}
-              >
-                {fighterB} (B) won
-              </button>{' '}
-            </>
-          )}
+          <Tape />
+          <Panel title="Settle or void" tone="danger">
+            {canSettle && (
+              <>
+                <Button
+                  type="button"
+                  variant="danger"
+                  disabled={busy || !armed}
+                  onClick={() => call(`/api/admin/fights/${fightId}/settle`, { outcome: 'A' })}
+                >
+                  {fighterA} (A) won
+                </Button>{' '}
+                <Button
+                  type="button"
+                  variant="danger"
+                  disabled={busy || !armed}
+                  onClick={() => call(`/api/admin/fights/${fightId}/settle`, { outcome: 'B' })}
+                >
+                  {fighterB} (B) won
+                </Button>{' '}
+              </>
+            )}
 
-          {canVoid && (
-            <button
-              disabled={busy || !armed}
-              onClick={() => call(`/api/admin/fights/${fightId}/settle`, { outcome: 'VOID' })}
-            >
-              Void and refund
-            </button>
-          )}
+            {canVoid && (
+              <Button
+                type="button"
+                variant="danger"
+                disabled={busy || !armed}
+                onClick={() => call(`/api/admin/fights/${fightId}/settle`, { outcome: 'VOID' })}
+              >
+                Void and refund
+              </Button>
+            )}
+          </Panel>
         </>
       )}
 
-      {error && <p className="error">{error}</p>}
+      {error && <Callout tone="danger">{error}</Callout>}
     </fieldset>
   )
 }

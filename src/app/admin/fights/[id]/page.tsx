@@ -4,6 +4,7 @@ import { currentUser } from '@/lib/http/auth'
 import { getFight, poolTotals, FightError } from '@/lib/fights/repo'
 import { FightAdminControls } from '@/components/FightAdminControls'
 import { Money } from '@/components/Money'
+import { Panel, Stat } from '@/components/ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,32 +26,19 @@ export default async function AdminFightPage({ params }: { params: Promise<{ id:
       <h1>
         {fight.fighterA} vs {fight.fighterB}
       </h1>
-      <table>
-        <tbody>
-          <tr>
-            <th>Status</th>
-            <td>
-              {fight.status}
-              {fight.outcome ? ` (${fight.outcome})` : ''}
-            </td>
-          </tr>
-          <tr>
-            <th>Locks at</th>
-            <td>{fight.lockAt.toISOString()}</td>
-          </tr>
-          <tr>
-            <th>Rake</th>
-            <td>{(fight.rakeBps / 100).toFixed(2)}%</td>
-          </tr>
-          <tr>
-            <th>Pool</th>
-            <td>
-              <Money micros={totals.total} /> (A <Money micros={totals.a} />, B{' '}
-              <Money micros={totals.b} />)
-            </td>
-          </tr>
-        </tbody>
-      </table>
+
+      <Panel title="Fight details">
+        <Stat label="Status">
+          {fight.status}
+          {fight.outcome ? ` (${fight.outcome})` : ''}
+        </Stat>
+        <Stat label="Locks at">{fight.lockAt.toISOString()}</Stat>
+        <Stat label="Rake">{(fight.rakeBps / 100).toFixed(2)}%</Stat>
+        <Stat label="Pool">
+          <Money micros={totals.total} /> (A <Money micros={totals.a} />, B{' '}
+          <Money micros={totals.b} />)
+        </Stat>
+      </Panel>
 
       <FightAdminControls
         fightId={fight.id}

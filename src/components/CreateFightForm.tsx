@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiPost, ApiError } from '@/lib/client/api'
+import { Button, Callout } from '@/components/ui'
 
 export function CreateFightForm() {
   const router = useRouter()
@@ -64,10 +65,10 @@ export function CreateFightForm() {
         <label>
           Rake (bps, 0–2000) <input type="number" value={form.rakeBps} onChange={set('rakeBps')} />
         </label>
-        {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={busy}>
+        {error && <Callout tone="danger">{error}</Callout>}
+        <Button type="submit" disabled={busy}>
           {busy ? 'Creating…' : 'Create draft'}
-        </button>
+        </Button>
       </fieldset>
     </form>
   )

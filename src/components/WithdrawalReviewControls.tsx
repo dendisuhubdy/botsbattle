@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiPost, ApiError } from '@/lib/client/api'
+import { Button, Callout, Panel, Tape } from '@/components/ui'
 
 /**
  * Approval sends real money and is irreversible, so it requires a typed confirmation before
@@ -44,9 +45,10 @@ export function WithdrawalReviewControls({
 
   return (
     <fieldset>
-      <legend>
-        Review — {amountLabel} to <code>{address}</code>
-      </legend>
+      <legend>Review withdrawal</legend>
+      <p>
+        <span className="mono">{amountLabel}</span> to <span className="mono">{address}</span>
+      </p>
       <label>
         Note
         <input value={note} onChange={(e) => setNote(e.target.value)} />
@@ -55,19 +57,28 @@ export function WithdrawalReviewControls({
         Type SEND to enable approval
         <input value={confirm} onChange={(e) => setConfirm(e.target.value)} />
       </label>
-      <button
+      <Button
+        type="button"
+        variant="primary"
         disabled={busy || !armed}
         onClick={() => call(`/api/admin/withdrawals/${requestId}/approve`, { note: note || undefined })}
       >
         Approve and send
-      </button>{' '}
-      <button
-        disabled={busy || note.trim().length === 0}
-        onClick={() => call(`/api/admin/withdrawals/${requestId}/reject`, { note })}
-      >
-        Reject and refund
-      </button>
-      {error && <p className="error">{error}</p>}
+      </Button>
+
+      <Tape />
+      <Panel tone="danger">
+        <Button
+          type="button"
+          variant="danger"
+          disabled={busy || note.trim().length === 0}
+          onClick={() => call(`/api/admin/withdrawals/${requestId}/reject`, { note })}
+        >
+          Reject and refund
+        </Button>
+      </Panel>
+
+      {error && <Callout tone="danger">{error}</Callout>}
     </fieldset>
   )
 }

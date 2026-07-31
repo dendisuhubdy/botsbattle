@@ -7,6 +7,7 @@ import { listFights, poolTotals } from '@/lib/fights/repo'
 import { CreateFightForm } from '@/components/CreateFightForm'
 import { CreditForm } from '@/components/CreditForm'
 import { Money } from '@/components/Money'
+import { DataTable, EmptyState, Panel } from '@/components/ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,22 +30,20 @@ export default async function AdminPage() {
       <p>
         <Link href="/admin/withdrawals">Withdrawal queue</Link>
       </p>
-      <CreateFightForm />
-      <CreditForm users={users.rows} />
 
-      <h2>Fights</h2>
-      {rows.length === 0 ? (
-        <p>No fights yet.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Fight</th>
-              <th>Status</th>
-              <th>Pool</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Panel title="New fight">
+        <CreateFightForm />
+      </Panel>
+
+      <Panel title="Credit a balance">
+        <CreditForm users={users.rows} />
+      </Panel>
+
+      <Panel title="Fights">
+        {rows.length === 0 ? (
+          <EmptyState>No fights yet.</EmptyState>
+        ) : (
+          <DataTable headers={['Fight', 'Status', 'Pool']}>
             {rows.map(({ fight, totals }) => (
               <tr key={fight.id}>
                 <td>
@@ -61,9 +60,9 @@ export default async function AdminPage() {
                 </td>
               </tr>
             ))}
-          </tbody>
-        </table>
-      )}
+          </DataTable>
+        )}
+      </Panel>
     </>
   )
 }

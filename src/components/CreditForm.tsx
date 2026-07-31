@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiPost, ApiError } from '@/lib/client/api'
+import { Button, Callout } from '@/components/ui'
 
 export function CreditForm({ users }: { users: { id: string; email: string }[] }) {
   const router = useRouter()
@@ -54,10 +55,10 @@ export function CreditForm({ users }: { users: { id: string; email: string }[] }
             required
           />
         </label>
-        {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={busy || !userId}>
+        {error && <Callout tone="danger">{error}</Callout>}
+        <Button type="submit" disabled={busy || !userId}>
           {busy ? 'Crediting…' : 'Credit'}
-        </button>
+        </Button>
       </fieldset>
     </form>
   )
