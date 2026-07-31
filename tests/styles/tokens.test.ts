@@ -19,14 +19,25 @@ describe('design tokens', () => {
     for (const token of TOKENS) expect(root, token).toHaveProperty(token)
   })
 
-  it('keeps the dark values byte-identical to the landing page originals', () => {
-    const root = darkTokens()
-    expect(root['--void']).toBe('#0a0a0d')
-    expect(root['--ink']).toBe('#f3efe6')
-    expect(root['--hazard']).toBe('#f4c518')
-    expect(root['--danger']).toBe('#e2402c')
-    expect(root['--ok']).toBe('#4fd67a')
-  })
+  const DARK_ORIGINALS: Record<string, string> = {
+    '--ink': '#f3efe6',
+    '--ink-dim': '#b8b2a6',
+    '--void': '#0a0a0d',
+    '--void-raised': '#131316',
+    '--void-line': '#232327',
+    '--hazard': '#f4c518',
+    '--hazard-ink': '#1a1500',
+    '--danger': '#e2402c',
+    '--danger-panel': '#2a1310',
+    '--ok': '#4fd67a',
+  }
+
+  it.each(Object.entries(DARK_ORIGINALS))(
+    'keeps the dark value of %s byte-identical to the landing page original',
+    (token, expected) => {
+      expect(darkTokens()[token]).toBe(expected)
+    },
+  )
 
   it('no longer redeclares tokens inside .landing', () => {
     expect(readCustomProperties(landing, '.landing')).toEqual({})
