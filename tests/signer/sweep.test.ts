@@ -46,7 +46,7 @@ describe('sweep planning', () => {
     tron.deposit({ to: address, amountMicros: 20n * USDT, blockNumber: 1 })
 
     const plans = await planSweeps(db, tron, OPTS)
-    expect(plans).toEqual([{ derivationIndex: 0, address, amountMicros: (20n * USDT).toString() }])
+    expect(plans).toEqual([{ derivationIndex: 1, address, amountMicros: (20n * USDT).toString() }])
   })
 
   it('plans nothing for an empty address', async () => {

@@ -6,7 +6,7 @@ import { testDb, truncateAll } from '../helpers/db'
 import { makeUser } from '../helpers/fixtures'
 import type { Db } from '@/lib/db/client'
 import { deposits as depositsTable } from '@/lib/db/schema'
-import { ACCOUNT_PATH } from '@/lib/tron/address'
+import { ACCOUNT_PATH, deriveAddress } from '@/lib/tron/address'
 import { assignDepositAddress } from '@/lib/deposits/addresses'
 import { recordSeenTransfer, creditConfirmedDeposits } from '@/lib/deposits/credit'
 import { userBalance, balanceOf, houseAccount } from '@/lib/ledger/accounts'
@@ -17,6 +17,21 @@ const MNEMONIC =
 const XPUB = HDKey.fromMasterSeed(mnemonicToSeedSync(MNEMONIC)).derive(ACCOUNT_PATH)
   .publicExtendedKey
 const USDT = 1_000_000n
+
+/**
+ * An address from a different wallet entirely. Deriving the "not ours" address from a
+ * *different* seed means it can never collide with an index of XPUB, however many deposit
+ * addresses get assigned. A literal lifted from `deriveAddress(XPUB, n)` silently becomes
+ * one of ours the moment allocation reaches n.
+ */
+const FOREIGN_ADDRESS = deriveAddress(
+  HDKey.fromMasterSeed(
+    mnemonicToSeedSync(
+      'legal winner thank year wave sausage worth useful legal winner thank yellow',
+    ),
+  ).derive(ACCOUNT_PATH).publicExtendedKey,
+  0,
+)
 
 function transfer(over: Partial<Trc20Transfer> & { to: string }): Trc20Transfer {
   return {
@@ -59,7 +74,7 @@ describe('deposit crediting', () => {
   it('ignores a transfer to an address we do not own', async () => {
     const result = await recordSeenTransfer(
       db,
-      transfer({ to: 'TSeJkUh4Qv67VNFwY8LaAxERygNdy6NQZK' }),
+      transfer({ to: FOREIGN_ADDRESS }),
     )
     expect(result).toBeNull()
     expect(await db.select().from(depositsTable)).toHaveLength(0)

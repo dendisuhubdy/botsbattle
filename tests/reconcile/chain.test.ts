@@ -58,16 +58,21 @@ describe('reconcileChain', () => {
 
   it('still balances once funds are swept to the hot wallet', async () => {
     const user = await makeUser(db)
-    const { address } = await assignDepositAddress(db, { userId: user, xpub: XPUB })
+    const { address, derivationIndex } = await assignDepositAddress(db, {
+      userId: user,
+      xpub: XPUB,
+    })
 
     const tron = new FakeTron()
     const transfer = tron.deposit({ to: address, amountMicros: 60n * USDT, blockNumber: 100 })
     await recordSeenTransfer(db, transfer)
     await creditConfirmedDeposits(db, 200, 19)
 
-    // Perform the sweep for real, with the key the signer would use for index 0.
+    // Perform the sweep for real, with the key the signer would use for this address.
+    // Read the index back rather than assuming it: index 0 is reserved for the hot wallet,
+    // so assignment starts at 1.
     await tron.sendTrc20({
-      fromPrivateKeyHex: derivePrivateKeyHex(SEED, 0),
+      fromPrivateKeyHex: derivePrivateKeyHex(SEED, derivationIndex),
       to: HOT,
       amountMicros: 60n * USDT,
     })

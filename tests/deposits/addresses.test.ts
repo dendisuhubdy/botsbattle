@@ -27,13 +27,24 @@ describe('deposit addresses', () => {
     await truncateAll(db)
   })
 
-  it('assigns index 0 to the first user', async () => {
+  it('assigns index 1 to the first user, reserving index 0 for the hot wallet', async () => {
     const user = await makeUser(db)
     const assigned = await assignDepositAddress(db, { userId: user, xpub: XPUB })
 
-    expect(assigned.derivationIndex).toBe(0)
+    expect(assigned.derivationIndex).toBe(1)
     expect(assigned.created).toBe(true)
-    expect(assigned.address).toBe(deriveAddress(XPUB, 0))
+    expect(assigned.address).toBe(deriveAddress(XPUB, 1))
+  })
+
+  it('never hands out the hot wallet index', async () => {
+    // The hot wallet lives at index 0. If a user were ever assigned it, their deposit
+    // address would be the hot wallet itself and enqueueSweeps would sweep it to itself.
+    const users = await Promise.all(Array.from({ length: 12 }, () => makeUser(db)))
+    const assigned = await Promise.all(
+      users.map((userId) => assignDepositAddress(db, { userId, xpub: XPUB })),
+    )
+
+    expect(assigned.every((a) => a.derivationIndex > 0)).toBe(true)
   })
 
   it('gives each user the next index without gaps', async () => {
@@ -42,7 +53,7 @@ describe('deposit addresses', () => {
     for (const user of users) {
       indices.push((await assignDepositAddress(db, { userId: user, xpub: XPUB })).derivationIndex)
     }
-    expect(indices).toEqual([0, 1, 2])
+    expect(indices).toEqual([1, 2, 3])
   })
 
   it('is idempotent for one user', async () => {
@@ -65,7 +76,7 @@ describe('deposit addresses', () => {
     expect(new Set(results.map((r) => r.derivationIndex)).size).toBe(10)
     expect(new Set(results.map((r) => r.address)).size).toBe(10)
     expect(results.map((r) => r.derivationIndex).sort((a, b) => a - b)).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
     ])
   })
 

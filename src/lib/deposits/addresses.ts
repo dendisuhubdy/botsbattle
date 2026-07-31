@@ -44,9 +44,15 @@ export async function assignDepositAddress(
     const raced = await getDepositAddress(tx, args.userId)
     if (raced) return { ...raced, created: false }
 
+    // Index 0 is reserved for the hot wallet (TRON_HOT_WALLET_INDEX), so user deposit
+    // addresses start at 1. Handing index 0 to the first user would make their deposit
+    // address *be* the hot wallet: their deposit would be indistinguishable from float,
+    // and `enqueueSweeps` -- which sweeps every row in deposit_addresses without excluding
+    // the hot wallet -- would queue a sweep from the hot wallet to itself.
     const [{ next }] = await tx
       .execute<{ next: number }>(
-        sql`SELECT COALESCE(MAX(derivation_index) + 1, 0)::int AS next FROM deposit_addresses`,
+        sql`SELECT GREATEST(COALESCE(MAX(derivation_index) + 1, 1), 1)::int AS next
+            FROM deposit_addresses`,
       )
       .then((r) => r.rows)
 
