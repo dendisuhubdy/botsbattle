@@ -53,6 +53,10 @@ export default async function FightsPage() {
                     {fight.outcome ? ` (${fight.outcome})` : ''}
                   </dd>
                 </div>
+                <div>
+                  <dt>Locks</dt>
+                  <dd>{fight.lockAt.toISOString().replace('T', ' ').slice(0, 16)}</dd>
+                </div>
               </dl>
             </Link>
           ))}

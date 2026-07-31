@@ -10,7 +10,6 @@ import {
 } from '@/lib/fights/repo'
 import { BetForm, type FightView } from '@/components/BetForm'
 import { currentUser } from '@/lib/http/auth'
-import { Money, Multiplier } from '@/components/Money'
 import { Panel, Stat } from '@/components/ui'
 import styles from '../fights.module.css'
 
@@ -57,15 +56,11 @@ export default async function FightPage({ params }: { params: Promise<{ id: stri
       </p>
 
       <div className={styles.statRow}>
-        <Stat label="Pool">
-          <Money micros={totals.total} />
+        <Stat label="Status">
+          {fight.status}
+          {fight.outcome ? ` (${fight.outcome})` : ''}
         </Stat>
-        <Stat label={`Est. ${fight.fighterA}`}>
-          <Multiplier micros={estimated.a} />
-        </Stat>
-        <Stat label={`Est. ${fight.fighterB}`}>
-          <Multiplier micros={estimated.b} />
-        </Stat>
+        <Stat label="Locks">{fight.lockAt.toISOString().replace('T', ' ').slice(0, 16)}</Stat>
       </div>
 
       {fight.streamEmbedUrl && (
