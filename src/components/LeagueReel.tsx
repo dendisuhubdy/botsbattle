@@ -22,8 +22,18 @@ import styles from './LeagueReel.module.css'
  * single official video id, and revisit point 2 above, because then it genuinely is live.
  */
 
-/** Third-party uploads, verified embeddable. Lead with actual fight footage. */
+/**
+ * Third-party uploads, verified embeddable. Lead with actual fight footage.
+ *
+ * `start` skips a presenter intro so the panel opens on fighting rather than on a talking
+ * head. YouTube only honours it for the video in the path, not for queued ones, so only the
+ * lead entry's offset has any effect — the rest are recorded so the intent survives a
+ * reordering, and `reelEmbedUrl` reads it off whichever entry ends up first.
+ */
 const REEL = [
+  { id: 'k2ty5NR2vQc', channel: 'CN.科技发布会' }, // The opening match itself — lead with the fight
+  { id: '3QY62StK14k', channel: 'Chris Wabs', start: 51 }, // Rounds 1-3, English commentary
+  { id: '5IMU5or-VFo', channel: 'Chris Wabs', start: 73 }, // Robots Fight for $1M Prize
   { id: 'NyhlafILpqk', channel: 'OTOFOOTAGE' }, // White Eagle vs Matador, opening exhibition
   { id: 'MUv2zFegmFQ', channel: 'AI Disrupt' },
   { id: 'DUbbBdSGHE8', channel: 'The Construct Robotics Institute' },
@@ -45,16 +55,23 @@ const REEL = [
  * documented YouTube embed uses it raw, so there is no reason to hand the player a form
  * nobody tests against.
  *
+ * `start` is emitted only when the lead entry declares one, and only ever for the lead:
+ * YouTube applies it to the video in the path and ignores it for queued ids.
+ *
  * Throws on an empty queue rather than emitting `/embed/undefined`, which renders as a
  * YouTube error frame that looks like our bug.
  */
-export function reelEmbedUrl(ids: readonly string[]): string {
-  const [first, ...rest] = ids
-  if (!first) throw new Error('reelEmbedUrl: needs at least one video id')
+export function reelEmbedUrl(reel: readonly { id: string; start?: number }[]): string {
+  const [first, ...rest] = reel
+  if (!first) throw new Error('reelEmbedUrl: needs at least one video')
 
-  const query = ['rel=0', ...(rest.length > 0 ? [`playlist=${rest.join(',')}`] : [])]
+  const query = [
+    'rel=0',
+    ...(first.start ? [`start=${first.start}`] : []),
+    ...(rest.length > 0 ? [`playlist=${rest.map((v) => v.id).join(',')}`] : []),
+  ]
 
-  return `https://www.youtube-nocookie.com/embed/${first}?${query.join('&')}`
+  return `https://www.youtube-nocookie.com/embed/${first.id}?${query.join('&')}`
 }
 
 export function LeagueReel() {
@@ -64,7 +81,7 @@ export function LeagueReel() {
 
       <div className={styles.frame}>
         <iframe
-          src={reelEmbedUrl(REEL.map((v) => v.id))}
+          src={reelEmbedUrl(REEL)}
           title="Recorded coverage of Ultimate Robot Knock-out Legend bouts"
           /* No `autoplay`: audible video that starts itself next to real-money betting copy
              is hostile, and browsers block it anyway. The viewer presses play. */
@@ -76,7 +93,9 @@ export function LeagueReel() {
       </div>
 
       <p className={styles.credit}>
-        Footage from {REEL.map((v) => v.channel).join(', ')}, via YouTube.
+        {/* Deduped: one uploader contributes more than one clip, and crediting them twice
+            reads as a bug rather than as thoroughness. */}
+        Footage from {[...new Set(REEL.map((v) => v.channel))].join(', ')}, via YouTube.
       </p>
 
       <p className={styles.disclaimer}>

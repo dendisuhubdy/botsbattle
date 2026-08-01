@@ -5,35 +5,51 @@ import { LeagueReel, reelEmbedUrl } from '@/components/LeagueReel'
 
 const markup = renderToStaticMarkup(createElement(LeagueReel))
 
+const v = (id: string, start?: number) => ({ id, start })
+
 describe('reelEmbedUrl', () => {
   it('puts the first video in the path and queues the rest', () => {
-    const url = new URL(reelEmbedUrl(['aaa', 'bbb', 'ccc']))
+    const url = new URL(reelEmbedUrl([v('aaa'), v('bbb'), v('ccc')]))
     expect(url.pathname).toBe('/embed/aaa')
     expect(url.searchParams.get('playlist')).toBe('bbb,ccc')
   })
 
   it('omits the queue parameter for a single video', () => {
-    const url = new URL(reelEmbedUrl(['aaa']))
+    const url = new URL(reelEmbedUrl([v('aaa')]))
     expect(url.pathname).toBe('/embed/aaa')
     expect(url.searchParams.has('playlist')).toBe(false)
   })
 
   it('uses the no-cookie host, since the site shows no cookie banner', () => {
-    expect(new URL(reelEmbedUrl(['aaa'])).host).toBe('www.youtube-nocookie.com')
+    expect(new URL(reelEmbedUrl([v('aaa')])).host).toBe('www.youtube-nocookie.com')
   })
 
   it('never asks the player to autoplay', () => {
-    expect(new URL(reelEmbedUrl(['aaa'])).searchParams.has('autoplay')).toBe(false)
+    expect(new URL(reelEmbedUrl([v('aaa')])).searchParams.has('autoplay')).toBe(false)
   })
 
   it('separates queued ids with a raw comma, not %2C', () => {
     // URLSearchParams escapes the separator; the player is only ever tested against the
     // raw form, so keep it raw.
-    expect(reelEmbedUrl(['aaa', 'bbb', 'ccc'])).toContain('playlist=bbb,ccc')
+    expect(reelEmbedUrl([v('aaa'), v('bbb'), v('ccc')])).toContain('playlist=bbb,ccc')
+  })
+
+  it('applies the lead video start offset', () => {
+    expect(new URL(reelEmbedUrl([v('aaa', 51), v('bbb')])).searchParams.get('start')).toBe('51')
+  })
+
+  it('omits start entirely when the lead has no offset', () => {
+    expect(new URL(reelEmbedUrl([v('aaa'), v('bbb', 51)])).searchParams.has('start')).toBe(false)
+  })
+
+  it('never emits a queued video offset, which YouTube would ignore anyway', () => {
+    // Guards against a future change that tries to thread per-video offsets into the URL
+    // and silently produces a start that applies to the wrong video.
+    expect(reelEmbedUrl([v('aaa', 10), v('bbb', 99)])).not.toContain('99')
   })
 
   it('refuses an empty queue rather than emitting /embed/undefined', () => {
-    expect(() => reelEmbedUrl([])).toThrow(/at least one video id/)
+    expect(() => reelEmbedUrl([])).toThrow(/at least one video/)
   })
 })
 
@@ -44,7 +60,8 @@ describe('LeagueReel', () => {
     const url = new URL(src!)
     const queued = url.searchParams.get('playlist')?.split(',') ?? []
     const ids = [url.pathname.replace('/embed/', ''), ...queued]
-    expect(ids).toHaveLength(5)
+    expect(ids).toHaveLength(8)
+    expect(new Set(ids).size, 'no video should appear twice in the queue').toBe(ids.length)
     // Guards against someone pasting a full watch URL into REEL, which would silently
     // produce /embed/https:.
     for (const id of ids) expect(id).toMatch(/^[\w-]{11}$/)
