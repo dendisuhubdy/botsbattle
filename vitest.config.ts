@@ -12,6 +12,9 @@ export default defineConfig({
     testTimeout: 30_000,
     setupFiles: ['dotenv/config'],
   },
+  // tsconfig.json sets `jsx: preserve` because Next does its own JSX transform. Vitest gets
+  // no such pass, so component tests need JSX compiled here or the import fails to parse.
+  oxc: { jsx: { runtime: 'automatic' } },
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },

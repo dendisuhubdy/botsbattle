@@ -1,0 +1,57 @@
+/*
+ * Design tokens (--ink, --void, --hazard, etc.) live in src/app/globals.css.
+ */
+
+.reel {
+  border: 1px solid var(--void-line);
+  border-left: 3px solid var(--hazard);
+  background: var(--void-raised);
+  padding: 1.5rem;
+  max-width: 56rem;
+  margin: 0 auto;
+}
+
+.tag {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-dim);
+  margin: 0 0 0.9rem;
+}
+
+/*
+ * aspect-ratio rather than the old padding-top hack, so the player keeps 16:9 at every
+ * width instead of letterboxing on a phone.
+ */
+.frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: var(--void);
+  border: 1px solid var(--void-line);
+}
+
+.frame iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.credit {
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  margin: 0.9rem 0 0;
+}
+
+.disclaimer {
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  border-top: 1px solid var(--void-line);
+  padding-top: 0.9rem;
+  margin: 0.9rem 0 0;
+  max-width: 70ch;
+}

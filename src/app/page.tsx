@@ -4,6 +4,7 @@ import { currentUser } from '@/lib/http/auth'
 import { getDb } from '@/lib/db/client'
 import { listFights, lockDueFights, poolTotals, estimatedPayoutPerUsdt } from '@/lib/fights/repo'
 import { Money, Multiplier } from '@/components/Money'
+import { LeagueReel } from '@/components/LeagueReel'
 import styles from './page.module.css'
 
 export const dynamic = 'force-dynamic'
@@ -289,6 +290,19 @@ export default async function LandingPage() {
             ))}
           </div>
         )}
+      </section>
+
+      <section className={styles.section} aria-labelledby="reel-heading">
+        <div className={styles.sectionHead}>
+          <h2 id="reel-heading" className={styles.sectionTitle}>
+            Watch the machines fight
+          </h2>
+          <p className={styles.sectionNote}>
+            Coverage of the Ultimate Robot Knock-out Legend from independent channels. Bouts
+            already fought, on a card that is not ours.
+          </p>
+        </div>
+        <LeagueReel />
       </section>
 
       <section className={styles.section} aria-labelledby="how-heading">
